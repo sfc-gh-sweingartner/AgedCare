@@ -1,0 +1,19 @@
+# Corporate Standard Style Theme Configuration
+# Healthcare AI Demo - Streamlit 1.49+ with modern features
+
+[theme]
+# Corporate Standard color scheme as defined in style guide
+primaryColor = "#0062df"      # Corporate blue for interactive elements
+backgroundColor = "#ffffff"   # Clean white background
+secondaryBackgroundColor = "#f0f2f6"  # Light gray for sidebar/widgets
+textColor = "#262730"        # Dark gray text
+font = "sans serif"          # Professional sans-serif font
+
+[server]
+# Development settings
+headless = false
+runOnSave = true
+
+[browser]
+# Gather usage stats for improvement
+gatherUsageStats = false

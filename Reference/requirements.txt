@@ -1,0 +1,29 @@
+# Healthcare AI Demo - SPCS V2 Requirements
+# External Access Integration required for PyPI package downloads
+# https://docs.snowflake.com/en/developer-guide/streamlit/additional-features#external-network-access-in-sis
+
+# Core framework
+streamlit>=1.49.0
+
+# Data processing
+pandas>=2.3.1
+numpy>=1.24.0
+
+# Visualization libraries  
+plotly>=6.0.1
+altair>=5.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Snowflake integration
+snowflake.core>=1.7.0
+
+# Date/time utilities
+python-dateutil>=2.8.0
+pytz>=2023.3
+
+# Style-specific UI components (for Modern Minimalist and Data-Dense Powerhouse)
+# These are not used in Corporate Standard style
+streamlit-option-menu>=0.3.6
+streamlit-shadcn-ui>=0.0.4
+streamlit-elements>=0.1.0
