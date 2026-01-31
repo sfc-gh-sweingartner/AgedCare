@@ -15,8 +15,10 @@ entities:
     artifacts:
       - streamlit_app.py
       - pyproject.toml
+      - src/__init__.py
       - src/connection_helper.py
       - src/dri_analysis.py
+      - app_pages/__init__.py
       - app_pages/dashboard.py
       - app_pages/prompt_engineering.py
       - app_pages/review_queue.py

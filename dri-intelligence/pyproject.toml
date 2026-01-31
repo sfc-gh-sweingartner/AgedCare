@@ -2,9 +2,10 @@
 name = "dri-intelligence"
 version = "1.0.0"
 description = "DRI Intelligence - AI-powered clinical analysis for aged care"
-requires-python = ">=3.11"
-
-[tool.poetry.dependencies]
-python = ">=3.11"
-pandas = ">=2.0.0"
-openpyxl = ">=3.0.0"
+requires-python = "==3.11.*"
+dependencies = [
+    "streamlit>=1.50",
+    "pandas>=2.0.0",
+    "openpyxl>=3.0.0",
+    "snowflake-snowpark-python>=1.0.0",
+]

@@ -1,7 +1,5 @@
 import streamlit as st
 import json
-import sys
-sys.path.insert(0, '/Users/sweingartner/CoCo/AgedCare/dri-intelligence')
 
 from src.connection_helper import get_snowflake_session, execute_query_df, execute_query
 from src.dri_analysis import get_rag_indicators
