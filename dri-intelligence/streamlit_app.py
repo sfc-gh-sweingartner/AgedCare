@@ -1,6 +1,4 @@
 import streamlit as st
-import sys
-sys.path.insert(0, '/Users/sweingartner/CoCo/AgedCare/dri-intelligence')
 
 st.set_page_config(
     page_title="DRI Intelligence",
