@@ -6,9 +6,49 @@ sys.path.insert(0, '/Users/sweingartner/CoCo/AgedCare/dri-intelligence')
 
 from src.connection_helper import get_snowflake_session, execute_query_df, execute_query
 
-st.set_page_config(page_title="Batch Testing", page_icon="🧪", layout="wide")
-st.title("🧪 Batch Testing")
 st.caption("Test batch processing on a selected range of records before production deployment")
+
+with st.expander("How to use this page", expanded=False, icon=":material/help:"):
+    st.markdown("""
+### Purpose
+This page lets you **test batch processing** on multiple residents using your production configuration before the nightly job runs. It's the final validation step before going live.
+
+### How to Use
+1. **Select a client** - batch uses that client's production model and prompt
+2. Review **Current production configuration** to confirm settings
+3. **Filter records**:
+   - Set date range to limit which notes are included
+   - Optionally select specific residents to test
+4. Review the **Records to process** preview
+5. Click **Run batch test** to execute
+
+### What Happens During Batch
+- Each resident is analyzed using the **production model and prompt** from Configuration
+- Results are stored in `DRI_LLM_ANALYSIS` for review
+- Items requiring approval are added to the **Review Queue**
+- **Production DRI scores are NOT updated** until approved
+
+### Understanding the Preview
+| Metric | Description |
+|--------|-------------|
+| **Residents to process** | Number of unique residents matching your filters |
+| **Total notes** | Sum of progress notes across selected residents |
+| **Est. processing time** | Approximate time based on ~45 seconds per resident |
+
+### Results Panel
+After batch completes:
+- **Successful/Failed** counts
+- **Avg processing time** per resident
+- Results table with indicators detected per resident
+- Batch ID for tracking in Analysis Results
+
+### Tips
+- Start with a small date range or few residents to validate
+- Check results in **Analysis Results** page by filtering on batch ID
+- Large batches (50+ residents) may take significant time
+- If many fail, check the error messages for prompt issues
+- Approve changes in **Review Queue** after validating results
+    """)
 
 session = get_snowflake_session()
 
@@ -23,7 +63,7 @@ if session:
         client_options = {f"{row['CLIENT_NAME']} ({row['CLIENT_SYSTEM_KEY']})": row['CONFIG_ID'] for _, row in clients.iterrows()}
         client_keys = {row['CONFIG_ID']: row['CLIENT_SYSTEM_KEY'] for _, row in clients.iterrows()}
         
-        st.markdown("### 🏢 Select Client")
+        st.subheader("Select client")
         selected_client_display = st.selectbox(
             "Client",
             list(client_options.keys()),
@@ -31,10 +71,8 @@ if session:
         )
         selected_config_id = client_options[selected_client_display]
         selected_client_key = client_keys[selected_config_id]
-        
-        st.markdown("---")
     else:
-        st.error("No clients found in configuration table")
+        st.error("No clients found in configuration table", icon=":material/error:")
         st.stop()
 
     prod_config = execute_query(f"""
@@ -60,40 +98,45 @@ if session:
         """, session)
         if fallback_prompt:
             prod_prompt_text = fallback_prompt[0]['PROMPT_TEXT']
-            st.info("Using prompt from DRI_PROMPT_VERSIONS (not yet saved to client config)")
+            st.info("Using prompt from DRI_PROMPT_VERSIONS (not yet saved to client config)", icon=":material/info:")
     
-    st.markdown("### Current Production Configuration")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Model", prod_model)
-    with col2:
-        st.metric("Prompt Version", prod_prompt_version)
-    with col3:
-        st.metric("Context Threshold", f"{context_threshold:,}")
-    with col4:
-        has_prompt = "✅ Configured" if prod_prompt_text else "⚠️ Not Set"
-        st.metric("Prompt Text", has_prompt)
+    st.subheader("Current production configuration")
+    with st.container(border=True):
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Model", prod_model)
+        with col2:
+            st.metric("Prompt version", prod_prompt_version)
+        with col3:
+            st.metric("Context threshold", f"{context_threshold:,}")
+        with col4:
+            if prod_prompt_text:
+                st.badge("Configured", icon=":material/check:", color="green")
+            else:
+                st.badge("Not set", icon=":material/warning:", color="orange")
     
     if not prod_prompt_text:
-        st.error("No production prompt configured. Go to Configuration → Processing Settings to save a prompt for production.")
+        st.error("No production prompt configured. Go to Configuration → Processing settings to save a prompt for production.", icon=":material/error:")
         st.stop()
     
-    st.markdown("---")
-    st.markdown("### Select Records for Batch Test")
+    st.subheader("Select records for batch test")
     
     col_filter1, col_filter2 = st.columns(2)
     
     with col_filter1:
-        st.markdown("#### Date Range Filter")
+        st.markdown("**Date range filter**")
         
         try:
-            date_stats = execute_query("""
+            date_stats = execute_query(f"""
                 SELECT 
                     TO_CHAR(MIN(CAST(EVENT_DATE AS DATE)), 'YYYY-MM-DD') as MIN_DATE,
                     TO_CHAR(MAX(CAST(EVENT_DATE AS DATE)), 'YYYY-MM-DD') as MAX_DATE,
                     COUNT(DISTINCT RESIDENT_ID) as TOTAL_RESIDENTS
                 FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES
                 WHERE EVENT_DATE IS NOT NULL
+                  AND TRY_TO_DATE(EVENT_DATE::VARCHAR) IS NOT NULL
+                  AND EVENT_DATE >= '1900-01-01' AND EVENT_DATE <= '2100-01-01'
+                  AND (SYSTEM_KEY = '{selected_client_key}' OR SYSTEM_KEY IS NULL)
             """, session)
             
             if date_stats and date_stats[0]['MIN_DATE']:
@@ -107,19 +150,20 @@ if session:
                 min_date = datetime.now().date() - timedelta(days=365)
                 max_date = datetime.now().date()
         except Exception as e:
-            st.warning(f"Could not load date range: {e}")
+            st.warning(f"Could not load date range: {e}", icon=":material/warning:")
             min_date = datetime.now().date() - timedelta(days=365)
             max_date = datetime.now().date()
         
-        date_from = st.date_input("From Date", value=max(min_date, max_date - timedelta(days=30)), min_value=min_date, max_value=max_date)
-        date_to = st.date_input("To Date", value=max_date, min_value=min_date, max_value=max_date)
+        date_from = st.date_input("From date", value=max(min_date, max_date - timedelta(days=30)), min_value=min_date, max_value=max_date)
+        date_to = st.date_input("To date", value=max_date, min_value=min_date, max_value=max_date)
     
     with col_filter2:
-        st.markdown("#### Resident Filter")
+        st.markdown("**Resident filter**")
         
-        residents = execute_query_df("""
+        residents = execute_query_df(f"""
             SELECT DISTINCT RESIDENT_ID 
             FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES
+            WHERE SYSTEM_KEY = '{selected_client_key}' OR SYSTEM_KEY IS NULL
             ORDER BY RESIDENT_ID
         """, session)
         
@@ -129,7 +173,7 @@ if session:
             resident_list = ["All Residents"]
         
         selected_residents = st.multiselect(
-            "Select Specific Residents (optional)",
+            "Select specific residents (optional)",
             resident_list,
             default=[],
             help="Leave empty to process all residents in the date range"
@@ -137,9 +181,7 @@ if session:
         
         use_all_residents = "All Residents" in selected_residents or len(selected_residents) == 0
     
-    st.markdown("---")
-    
-    where_clause_parts = [f"EVENT_DATE >= '{date_from}'", f"EVENT_DATE <= '{date_to}'"]
+    where_clause_parts = [f"EVENT_DATE >= '{date_from}'", f"EVENT_DATE <= '{date_to}'", f"(SYSTEM_KEY = '{selected_client_key}' OR SYSTEM_KEY IS NULL)"]
     if not use_all_residents:
         resident_ids = [r for r in selected_residents if r != "All Residents"]
         if resident_ids:
@@ -161,25 +203,25 @@ if session:
     
     preview_data = execute_query_df(preview_query, session)
     
-    st.markdown("### Records to Process")
+    st.subheader("Records to process")
     
     if preview_data is not None and len(preview_data) > 0:
-        col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1:
-            st.metric("Residents to Process", len(preview_data))
-        with col_m2:
-            st.metric("Total Notes", preview_data['NOTE_COUNT'].sum())
-        with col_m3:
-            est_time = len(preview_data) * 45
-            st.metric("Est. Processing Time", f"{est_time // 60}m {est_time % 60}s")
+        with st.container(border=True):
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                st.metric("Residents to process", len(preview_data))
+            with col_m2:
+                st.metric("Total notes", preview_data['NOTE_COUNT'].sum())
+            with col_m3:
+                est_time = len(preview_data) * 45
+                st.metric("Est. processing time", f"{est_time // 60}m {est_time % 60}s")
         
-        with st.expander("View Residents to Process", expanded=False):
+        with st.expander("View residents to process", expanded=False, icon=":material/group:"):
             st.dataframe(preview_data, use_container_width=True)
     else:
-        st.warning("No records match the selected filters")
+        st.warning("No records match the selected filters", icon=":material/warning:")
     
-    st.markdown("---")
-    st.markdown("### Run Batch Test")
+    st.subheader("Run batch test")
     
     col_run1, col_run2 = st.columns([2, 1])
     
@@ -190,14 +232,15 @@ if session:
         - Stores results in DRI_LLM_ANALYSIS for review
         - Creates entries in DRI_REVIEW_QUEUE for human approval
         - Does NOT update production DRI scores (requires approval)
-        """)
+        """, icon=":material/info:")
     
     with col_run2:
         run_batch = st.button(
-            "🚀 Run Batch Test",
+            "Run batch test",
             type="primary",
             use_container_width=True,
-            disabled=(preview_data is None or len(preview_data) == 0)
+            disabled=(preview_data is None or len(preview_data) == 0),
+            icon=":material/play_arrow:"
         )
     
     if run_batch and preview_data is not None and len(preview_data) > 0:
@@ -208,7 +251,7 @@ if session:
         residents_to_process = preview_data['RESIDENT_ID'].tolist()
         total_residents = len(residents_to_process)
         
-        st.markdown(f"### Batch Run: `{batch_id[:8]}...`")
+        st.markdown(f"### Batch run: `{batch_id[:8]}...`")
         
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -388,16 +431,17 @@ if session:
         status_text.markdown("**Batch processing complete!**")
         
         with results_container:
-            st.markdown("### Batch Results")
+            st.subheader("Batch results")
             
-            col_r1, col_r2, col_r3 = st.columns(3)
-            with col_r1:
-                st.metric("Successful", successful, delta=None)
-            with col_r2:
-                st.metric("Failed", failed, delta=None)
-            with col_r3:
-                avg_time = sum(r['processing_time_ms'] for r in results) // max(len(results), 1)
-                st.metric("Avg Processing Time", f"{avg_time}ms")
+            with st.container(border=True):
+                col_r1, col_r2, col_r3 = st.columns(3)
+                with col_r1:
+                    st.metric("Successful", successful, delta=None)
+                with col_r2:
+                    st.metric("Failed", failed, delta=None)
+                with col_r3:
+                    avg_time = sum(r['processing_time_ms'] for r in results) // max(len(results), 1)
+                    st.metric("Avg processing time", f"{avg_time}ms")
             
             import pandas as pd
             results_df = pd.DataFrame(results)
@@ -407,9 +451,9 @@ if session:
             Batch test complete! Results stored with batch ID: `{batch_id}`
             
             **Next steps:**
-            1. Review results in the **Analysis Results** page
-            2. Approve or reject changes in the **Review Queue** page
-            """)
+            1. Review results in the **Analysis results** page
+            2. Approve or reject changes in the **Review queue** page
+            """, icon=":material/check_circle:")
 
 else:
-    st.error("Failed to connect to Snowflake")
+    st.error("Failed to connect to Snowflake", icon=":material/error:")

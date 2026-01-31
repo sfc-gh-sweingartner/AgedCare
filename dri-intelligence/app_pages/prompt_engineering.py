@@ -6,8 +6,31 @@ sys.path.insert(0, '/Users/sweingartner/CoCo/AgedCare/dri-intelligence')
 from src.connection_helper import get_snowflake_session, execute_query_df, execute_query
 from src.dri_analysis import get_rag_indicators
 
-st.set_page_config(page_title="Prompt Engineering", page_icon="🔬", layout="wide")
-st.title("🔬 Prompt engineering")
+with st.expander("How to use this page", expanded=False, icon=":material/help:"):
+    st.markdown("""
+### Purpose
+This page lets you **test and refine** the LLM prompt used to detect DRI (Deteriorating Resident Index) indicators in resident records. Use it to experiment with different models and prompt versions before deploying to production.
+
+### How to Use
+1. **Select a resident** from the dropdown to analyze their records
+2. **Choose an LLM model** - Claude 4.5 variants recommended for best accuracy
+3. **Select a prompt version** or edit the current prompt template
+4. **Review the resident context** preview to see what data will be sent to the LLM
+5. Click **Run LLM analysis** to execute and see results
+
+### Understanding Results
+- **Indicators detected**: Health conditions the AI identified in the resident's records
+- **Confidence**: How certain the AI is (high/medium/low)
+- **Evidence**: The specific text excerpts that support each finding
+- **Requires review**: Flagged indicators that need human verification
+
+### Tips
+- Test the same resident with different models to compare accuracy
+- Save promising prompt changes as new versions before modifying further
+- Check the **Claude vs Regex** page to compare AI results against the old keyword approach
+- Once satisfied, save your prompt for production in the **Configuration** page
+    """)
+
 st.caption("Test and tune LLM prompts for DRI indicator detection")
 
 session = get_snowflake_session()
@@ -96,29 +119,33 @@ if session:
         else:
             selected_version = "v1.0"
         
-        if st.button("📖 View resident context", use_container_width=True):
-            with st.spinner("Loading..."):
-                context_query = f"""
-                    WITH notes AS (
-                        SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
-                        FROM (SELECT PROGRESS_NOTE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 15)
-                    ),
-                    meds AS (
-                        SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as txt
-                        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
-                    ),
-                    obs AS (
-                        SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 50), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
-                        FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
-                    )
-                    SELECT 
-                        'PROGRESS NOTES:\\n' || (SELECT txt FROM notes) ||
-                        '\\n\\nMEDICATIONS:\\n' || (SELECT txt FROM meds) ||
-                        '\\n\\nOBSERVATIONS:\\n' || (SELECT txt FROM obs) as CONTEXT
-                """
-                result = execute_query(context_query, session)
-                if result:
-                    st.text_area("Resident context preview", result[0]['CONTEXT'], height=250)
+        st.subheader("Resident context")
+        context_query = f"""
+            WITH notes AS (
+                SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
+                FROM (SELECT PROGRESS_NOTE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 15)
+            ),
+            meds AS (
+                SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as txt
+                FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
+            ),
+            obs AS (
+                SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 50), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
+                FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
+            ),
+            forms AS (
+                SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 200), ' | ') as txt
+                FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} AND RESPONSE IS NOT NULL AND TRIM(RESPONSE) != ''
+            )
+            SELECT 
+                'PROGRESS NOTES:\\n' || COALESCE((SELECT txt FROM notes), 'None') ||
+                '\\n\\nMEDICATIONS:\\n' || COALESCE((SELECT txt FROM meds), 'None') ||
+                '\\n\\nOBSERVATIONS:\\n' || COALESCE((SELECT txt FROM obs), 'None') ||
+                '\\n\\nASSESSMENT FORMS:\\n' || COALESCE((SELECT txt FROM forms), 'None') as CONTEXT
+        """
+        result = execute_query(context_query, session)
+        if result:
+            st.text_area("Resident context preview", result[0]['CONTEXT'], height=250, label_visibility="collapsed")
     
     with col2:
         st.subheader("Prompt template")
@@ -143,7 +170,7 @@ if session:
         with col_v2:
             new_description = st.text_input("Description", value="Updated prompt")
         
-        if st.button("💾 Save as new version"):
+        if st.button("Save as new version", icon=":material/save:"):
             escaped_prompt = edited_prompt.replace("'", "''")
             try:
                 execute_query(f"""
@@ -151,14 +178,14 @@ if session:
                     (VERSION_NUMBER, PROMPT_TEXT, DESCRIPTION, CREATED_BY, IS_ACTIVE)
                     VALUES ('{new_version}', '{escaped_prompt}', '{new_description}', 'user', FALSE)
                 """, session)
-                st.success(f"Saved as version {new_version}")
+                st.success(f"Saved as version {new_version}", icon=":material/check_circle:")
                 st.cache_data.clear()
             except Exception as e:
-                st.error(f"Failed to save: {e}")
+                st.error(f"Failed to save: {e}", icon=":material/error:")
     
-    st.subheader("🚀 Run analysis")
+    st.subheader("Run analysis")
     
-    run_button = st.button("🚀 Run LLM analysis", type="primary")
+    run_button = st.button("Run LLM analysis", type="primary", icon=":material/play_arrow:")
     
     if run_button:
         with st.spinner(f"Analyzing resident {selected_resident} with {selected_model}..."):
@@ -213,7 +240,7 @@ if session:
                     max_tokens = 4096
                     token_mode = "standard"
                 
-                st.info(f"Context size: {context_length:,} chars → Using {token_mode} mode ({max_tokens:,} max tokens)")
+                st.info(f"Context size: {context_length:,} chars - Using {token_mode} mode ({max_tokens:,} max tokens)", icon=":material/info:")
                 
                 analysis_query = f"""
                 WITH resident_notes AS (
@@ -277,9 +304,9 @@ if session:
                     except (json.JSONDecodeError, TypeError):
                         response_text = raw_response
                         tokens_used = {}
-                    st.success(f"Completed in {processing_time}ms")
+                    st.success(f"Completed in {processing_time}ms", icon=":material/check_circle:")
                     
-                    tab1, tab2, tab3 = st.tabs(["📋 Formatted results", "📝 Raw JSON", "📊 Summary"])
+                    tab1, tab2, tab3 = st.tabs(["Formatted results", "Raw JSON", "Summary"])
                     
                     with tab1:
                         try:
@@ -316,72 +343,56 @@ if session:
                                     except json.JSONDecodeError:
                                         json_str = try_fix_truncated_json(json_str)
                                         parsed = json.loads(json_str)
-                                        st.info("Note: Response was truncated. Showing partial results.")
+                                        st.info("Response was truncated. Showing partial results.", icon=":material/info:")
                                 
                                 if 'summary' in parsed:
                                     summary = parsed['summary']
-                                    cols = st.columns(3)
-                                    with cols[0]:
-                                        st.metric("Indicators detected", summary.get('indicators_detected', 0))
-                                    with cols[1]:
-                                        st.metric("Indicators cleared", summary.get('indicators_cleared', 0))
-                                    with cols[2]:
-                                        st.metric("Requires review", summary.get('requires_review_count', 0))
+                                    with st.container(border=True):
+                                        cols = st.columns(3)
+                                        with cols[0]:
+                                            st.metric("Indicators detected", summary.get('indicators_detected', 0))
+                                        with cols[1]:
+                                            st.metric("Indicators cleared", summary.get('indicators_cleared', 0))
+                                        with cols[2]:
+                                            st.metric("Requires review", summary.get('requires_review_count', 0))
                                     if 'analysis_notes' in summary:
                                         st.caption(summary['analysis_notes'])
                                 
                                 if 'indicators' in parsed and parsed['indicators']:
-                                    st.markdown("### 🔍 Detected Indicators")
+                                    st.subheader("Detected indicators")
                                     for ind in parsed['indicators']:
                                         confidence = ind.get('confidence', 'N/A')
                                         requires_review = ind.get('requires_review', False)
-                                        conf_color = '#28a745' if confidence == 'high' else '#ffc107' if confidence == 'medium' else '#dc3545'
-                                        review_badge = '⚠️ REVIEW' if requires_review else ''
                                         
-                                        with st.expander(f"✅ {ind.get('deficit_id', 'Unknown')} - {ind.get('deficit_name', 'Unknown')} ({confidence} confidence) {review_badge}", expanded=False):
-                                            st.markdown(f"""
-                                            <div style="background-color: #f8f9fa; padding: 0.75rem; border-radius: 0.25rem; border-left: 4px solid {conf_color}; margin-bottom: 1rem;">
-                                                <strong>Reasoning:</strong> {ind.get('reasoning', 'N/A')}
-                                            </div>
-                                            """, unsafe_allow_html=True)
+                                        review_text = " - REVIEW" if requires_review else ""
+                                        with st.expander(f"{ind.get('deficit_id', 'Unknown')} - {ind.get('deficit_name', 'Unknown')} ({confidence} confidence){review_text}", expanded=False, icon=":material/check_circle:"):
+                                            with st.container(border=True):
+                                                st.markdown(f"**Reasoning:** {ind.get('reasoning', 'N/A')}")
                                             
                                             temporal = ind.get('temporal_status', {})
                                             if temporal:
-                                                st.markdown(f"""
-                                                <div style="background-color: #e7f3ff; padding: 0.5rem; border-radius: 0.25rem; margin-bottom: 0.5rem; font-size: 0.9rem;">
-                                                    <strong>Temporal:</strong> {temporal.get('type', 'N/A')} | 
-                                                    Onset: {temporal.get('onset_date', 'N/A')} | 
-                                                    Persistence: {temporal.get('persistence_rule', 'N/A')}
-                                                </div>
-                                                """, unsafe_allow_html=True)
+                                                st.caption(f"Temporal: {temporal.get('type', 'N/A')} | Onset: {temporal.get('onset_date', 'N/A')} | Persistence: {temporal.get('persistence_rule', 'N/A')}")
                                             
                                             if 'evidence' in ind and ind['evidence']:
                                                 st.markdown("**Evidence:**")
                                                 for ev in ind['evidence']:
-                                                    source = ev.get('source_table', 'N/A')
-                                                    record_id = ev.get('record_id', 'N/A')
-                                                    event_date = ev.get('event_date', 'N/A')
-                                                    excerpt = ev.get('text_excerpt', 'N/A')
-                                                    st.markdown(f"""
-                                                    <div style="background-color: #fff3cd; padding: 0.5rem; border-radius: 0.25rem; margin-bottom: 0.5rem; font-size: 0.85rem;">
-                                                        <strong>Source:</strong> {source} | <strong>Record ID:</strong> {record_id} | <strong>Date:</strong> {event_date}<br>
-                                                        <em>{excerpt}</em>
-                                                    </div>
-                                                    """, unsafe_allow_html=True)
+                                                    with st.container(border=True):
+                                                        st.caption(f"Source: {ev.get('source_table', 'N/A')} | Record ID: {ev.get('record_id', 'N/A')} | Date: {ev.get('event_date', 'N/A')}")
+                                                        st.caption(f"_{ev.get('text_excerpt', 'N/A')}_")
                                 
                                 if 'clinical_indicators' in parsed:
-                                    st.write("**Clinical indicators detected**")
+                                    st.markdown("**Clinical indicators detected**")
                                     for domain, data in parsed['clinical_indicators'].items():
                                         if isinstance(data, dict) and data.get('present', False):
-                                            with st.expander(f"✅ {domain.upper()}", expanded=True):
+                                            with st.expander(f"{domain.upper()}", expanded=True, icon=":material/check_circle:"):
                                                 if 'evidence' in data:
                                                     for ev in data['evidence']:
                                                         st.write(f"- {ev}")
                             else:
-                                st.warning("Could not parse JSON from response")
+                                st.warning("Could not parse JSON from response", icon=":material/warning:")
                                 st.text(response_text)
                         except json.JSONDecodeError as e:
-                            st.warning(f"JSON parsing error: {e}. The LLM response may be truncated or malformed.")
+                            st.warning(f"JSON parsing error: {e}. The LLM response may be truncated or malformed.", icon=":material/warning:")
                             with st.expander("View raw response", expanded=False):
                                 st.code(response_text, language="json")
                     
@@ -398,9 +409,9 @@ if session:
 - **Response length:** {len(response_text)} chars
                         """)
                 else:
-                    st.error("No response from LLM")
+                    st.error("No response from LLM", icon=":material/error:")
             except Exception as e:
-                st.error(f"Analysis failed: {e}")
+                st.error(f"Analysis failed: {e}", icon=":material/error:")
 
 else:
-    st.error("Failed to connect to Snowflake")
+    st.error("Failed to connect to Snowflake", icon=":material/error:")

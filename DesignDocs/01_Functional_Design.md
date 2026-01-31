@@ -654,54 +654,80 @@ CREATE OR REPLACE CORTEX SEARCH SERVICE dri_indicator_search
 ### 4.1 Streamlit Application Structure
 
 ```
-DRI Intelligence POC
-├── 1_📊_Dashboard.py           (Overview metrics and status)
-├── 2_🔬_Prompt_Engineering.py  (Edit and test prompts)
-├── 3_📋_Review_Queue.py        (Human approval workflow)
-├── 4_📈_Analysis_Results.py    (View LLM analysis details)
-└── 5_⚙️_Configuration.py       (Settings, RAG, and client config)
+DRI Intelligence POC (Implemented)
+├── dashboard.py              :material/dashboard:     (Overview metrics and status)
+├── prompt_engineering.py     :material/science:       (Edit and test prompts)
+├── review_queue.py           :material/checklist:     (Human approval workflow)
+├── analysis_results.py       :material/analytics:     (View LLM analysis details)
+├── configuration.py          :material/settings:      (Settings, RAG, client config)
+├── comparison.py             :material/compare_arrows: (Claude vs Regex comparison)
+└── batch_testing.py          :material/labs:          (Batch test runs)
 ```
+
+**Navigation:** Uses `st.navigation()` with Material icons (implemented in streamlit_app.py)
 
 ### 4.2 Page Descriptions
 
-#### Page 1: Dashboard
-- Total records processed today
-- Items pending review (with priority indicators)
-- False positive rate trend
-- Recent approvals/rejections
-- Prompt version in use
-- Client breakdown
+#### Page 1: Dashboard (IMPLEMENTED)
+- Residents in system count
+- Pending reviews count
+- DRI indicators count (33)
+- Analyses run count
+- Connection status indicator
+- Navigation guide expander
 
-#### Page 2: Prompt Engineering / Model Testing
-- Editable prompt template with syntax highlighting
-- **Resident Selection**: Pick specific residents from demo data for testing
-- **On-demand execution**: Run LLM analysis immediately (bypasses batch schedule)
-- Test against sample residents
-- View side-by-side old vs new results
-- Save as new version
-- Promote to production
+#### Page 2: Prompt Engineering / Model Testing (IMPLEMENTED)
+- Resident selector dropdown (populated from ACTIVE_RESIDENT_NOTES)
+- Model selector (Claude 4.5 variants + other Cortex models)
+- Prompt version selector from DRI_PROMPT_VERSIONS
+- Editable prompt text area with variable placeholders
+- On-demand LLM execution with adaptive token sizing
+- JSON result viewer with parsed indicator display
+- Evidence display with source references
+- Processing time and token mode indicator
+- Save new prompt version functionality
 
-#### Page 3: Review Queue
-- Filterable list of pending DRI changes (aggregate level)
-- **Each item represents a resident's proposed DRI score change**
-- Sort by DRI severity change, resident, date
-- **Expandable view**: See all indicator details and evidence
-- **Single approve/reject per resident** (not per indicator)
-- Bulk actions for high-confidence aggregate changes
+#### Page 3: Review Queue (IMPLEMENTED)
+- Filterable list of pending DRI changes from DRI_REVIEW_QUEUE
+- Each item represents a resident's proposed DRI score change
+- Status filtering (PENDING, APPROVED, REJECTED)
+- Expandable detail view with indicator changes
+- Single approve/reject per resident workflow
 
-#### Page 4: Analysis Results
-- Search by resident ID
-- View full LLM analysis JSON
-- **See all source record links for traceability**
-- Compare to previous analysis
-- Audit trail of changes
+#### Page 4: Analysis Results (IMPLEMENTED)
+- Browse all LLM analyses from DRI_LLM_ANALYSIS
+- Filter by resident, date range, batch ID
+- View full raw JSON response
+- Processing time and model used
+- Source traceability through evidence array
 
-#### Page 5: Configuration
-- Manage RAG indicator definitions
-- **Manage client-specific form mappings**
-- Add/edit business rules and temporal logic
-- View historical decision patterns
-- Export/import configurations
+#### Page 5: Configuration (IMPLEMENTED - 5 Tabs)
+- **Client Config Tab**: Client details, status, CONFIG_JSON viewer
+- **Form Mappings Tab**: Read-only table of form-to-indicator mappings
+- **Indicator Overrides Tab**: Read-only table of client overrides
+- **RAG Indicators Tab**: Browse all 33 indicators with filtering
+- **Processing Settings Tab**: Production model, prompt, schedule, token threshold
+
+#### Page 6: Claude vs Regex Comparison (IMPLEMENTED - NEW)
+- Side-by-side DRI score comparison
+- Resident and model selector
+- Context preview expander
+- Three-column comparison (Claude, Regex, Difference)
+- Detailed indicator breakdown tabs:
+  - Both Agree: Indicators detected by both methods
+  - Claude Only: True positives missed by regex
+  - Regex Only: Likely false positives
+- Raw JSON response viewer
+- Formula reference panel
+
+#### Page 7: Batch Testing (IMPLEMENTED - NEW)
+- Client selector for production config
+- Production config display (model, prompt version, threshold)
+- Date range filter with auto-detected bounds
+- Resident multi-select filter
+- Preview panel (count, notes, estimated time)
+- Run batch button with progress bar
+- Results summary with batch ID
 
 ---
 
@@ -825,14 +851,36 @@ Existing ETL ──▶ 6 Source Tables ──▶ Client Config ──▶ LLM Eng
 
 ---
 
-## 9. Next Steps
+## 9. Implementation Status
 
-1. **Approve this functional design**
-2. **Create detailed technical design** (database DDL, prompt templates, UI wireframes)
-3. **Set up POC environment** in demo Snowflake account
-4. **Implement core components** (2 weeks target)
-5. **Test with sample data**
-6. **Demo to Telstra Health**
+**All core features have been implemented as of 2026-01-30:**
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Database schema | ✅ Complete | All 15+ tables created in AGEDCARE.AGEDCARE |
+| Demo data loading | ✅ Complete | Resident 871 data loaded from Excel |
+| Cortex Search service | ✅ Complete | DRI_INDICATOR_SEARCH with 33 indicators |
+| Dashboard page | ✅ Complete | Metrics display, connection status |
+| Prompt Engineering page | ✅ Complete | Resident/model/version selector, run analysis |
+| Review Queue page | ✅ Complete | Aggregate approval workflow |
+| Analysis Results page | ✅ Complete | Browse LLM analyses |
+| Configuration page | ✅ Complete | 5 tabs including processing settings |
+| Claude vs Regex page | ✅ Complete | Side-by-side comparison with FP detection |
+| Batch Testing page | ✅ Complete | Multi-resident batch runs with progress |
+| Adaptive token sizing | ✅ Complete | Context threshold-based mode selection |
+| Production config storage | ✅ Complete | Model/prompt stored per-client in CONFIG_JSON |
+
+---
+
+## 10. Next Steps (Post-POC)
+
+1. ~~Approve this functional design~~ ✅ Approved
+2. ~~Create detailed technical design~~ ✅ Complete (v1.2)
+3. ~~Set up POC environment~~ ✅ Complete
+4. ~~Implement core components~~ ✅ Complete
+5. ~~Test with sample data~~ ✅ Complete
+6. **Demo to Telstra Health** - Pending
+7. **Production onboarding** - After demo approval
 
 ---
 
@@ -854,7 +902,19 @@ This document has been updated based on feedback from Telstra Health's data engi
 
 ---
 
-*Document Version: 1.3*  
+## Appendix B: Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | 2025-01-27 | Initial draft |
+| 1.1 | 2025-01-27 | Added ACTIVE_RESIDENT_OBSERVATION_GROUP, client config, temporal logic |
+| 1.2 | 2025-01-27 | Enhanced traceability, separation of detection vs calculation |
+| 1.3 | 2025-01-27 | Aggregate approval workflow, on-demand testing |
+| 1.4 | 2026-01-30 | Implementation sync: Updated UI structure to match actual build (7 pages), added Claude vs Regex comparison page, added Batch Testing page, marked all features as IMPLEMENTED, added implementation status table |
+
+---
+
+*Document Version: 1.4*  
 *Created: 2025-01-27*  
-*Updated: 2025-01-27 (Aggregate approval workflow + On-demand testing)*  
-*Status: Draft - Pending Approval*
+*Updated: 2026-01-30 (Implementation sync)*  
+*Status: Approved*

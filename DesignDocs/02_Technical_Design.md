@@ -3,9 +3,9 @@
 ## Document Information
 | Field | Value |
 |-------|-------|
-| Version | 1.1 |
+| Version | 1.2 |
 | Created | 2026-01-28 |
-| Status | Draft |
+| Status | Approved |
 | Prerequisite | Functional Design v1.3 (Approved) |
 
 ---
@@ -629,45 +629,42 @@ TRUE
 
 ```
 dri-intelligence/
-├── streamlit_app.py           # Main entry point
-├── pages/
-│   ├── 1_📊_Dashboard.py
-│   ├── 2_🔬_Prompt_Engineering.py
-│   ├── 3_📋_Review_Queue.py
-│   ├── 4_📈_Analysis_Results.py
-│   ├── 5_⚙️_Configuration.py
-│   ├── 6_🔄_Claude_vs_Regex_Comparison.py
-│   └── 7_🧪_Batch_Testing.py    # NEW: On-demand batch test runs
+├── streamlit_app.py           # Main entry point with st.navigation()
+├── app_pages/                  # Page modules (loaded via st.Page)
+│   ├── dashboard.py            # Dashboard - Overview metrics
+│   ├── prompt_engineering.py   # Prompt Engineering - Test/tune prompts
+│   ├── review_queue.py         # Review Queue - Approval workflow
+│   ├── analysis_results.py     # Analysis Results - View LLM output
+│   ├── configuration.py        # Configuration - Client & processing settings
+│   ├── comparison.py           # Claude vs Regex - Detection comparison
+│   └── batch_testing.py        # Batch Testing - Multi-resident runs
 ├── src/
-│   ├── connection_helper.py
-│   ├── dri_analysis.py
-│   ├── prompt_manager.py
-│   └── review_workflow.py
+│   ├── connection_helper.py    # Snowflake session management
+│   └── dri_analysis.py         # LLM analysis functions
 └── requirements.txt
 ```
 
+**Navigation:** Uses Streamlit's `st.navigation()` with Material icons:
+- Dashboard (:material/dashboard:)
+- Prompt engineering (:material/science:)
+- Review queue (:material/checklist:)
+- Analysis results (:material/analytics:)
+- Configuration (:material/settings:)
+- Claude vs Regex (:material/compare_arrows:)
+- Batch testing (:material/labs:)
+
 ### 5.2 Page 2: Prompt Engineering / Model Testing (Key Page)
 
-Based on Reference/src/pages/3_🔬_Prompt_and_Model_Testing.py pattern:
-
-```python
-# Key Features Required:
-# 1. Resident selector - search and select demo residents
-# 2. Prompt editor with syntax highlighting
-# 3. Model selector (Claude 4.5 as primary for AU)
-# 4. On-demand LLM execution
-# 5. JSON result viewer with evidence display
-# 6. Version comparison (old vs new prompt)
-# 7. Save/promote prompt versions
-
-# UI Components:
-# - st.text_area for prompt editing (height=350)
-# - st.selectbox for model selection
-# - st.button("🚀 Run Prompt") for execution
-# - st.tabs for result sections
-# - st.expander for raw response viewing
-# - Custom CSS for clinical result styling (blue boxes)
-```
+**Implemented Features:**
+- Resident selector dropdown populated from ACTIVE_RESIDENT_NOTES
+- Model selector with Claude 4.5 variants and other Snowflake Cortex models
+- Prompt version selector from DRI_PROMPT_VERSIONS table
+- Prompt text area editor with variable highlighting
+- Run Analysis button with adaptive token sizing
+- JSON result viewer with parsed indicator display
+- Evidence display with source table and excerpt
+- Processing time and token mode display
+- Save new prompt version capability
 
 ### 5.3 Page 3: Review Queue
 
@@ -682,56 +679,61 @@ Based on Reference/src/pages/3_🔬_Prompt_and_Model_Testing.py pattern:
 # - Filter by severity change, date, confidence
 ```
 
-### 5.4 Page 5: Configuration (Client Management) - KEY UI
+### 5.4 Page 5: Configuration (Client Management) - IMPLEMENTED
 
-This page displays and manages client-specific configurations. **NOTE:** Sample data is mocked for the POC to demonstrate multi-tenant configurability.
+This page displays and manages client-specific configurations. Sample data is mocked for the POC to demonstrate multi-tenant configurability.
 
-```python
-# Configuration Page Features:
-# 1. Client Selector - dropdown of configured clients
-# 2. Client Details Panel - name, description, version, status
-# 3. Form Mappings Table - editable grid showing:
-#    - Source Table | Form Identifier | Field Name | Mapped Indicator | Active
-# 4. Indicator Overrides Table - editable grid showing:
-#    - Indicator | Override Type | Override Value | Reason | Active
-# 5. JSON Config Editor - advanced view of full CONFIG_JSON
-# 6. Import/Export buttons for configuration migration
-# 7. Version history with rollback capability
+**Implemented Features (5 Tabs):**
 
-# UI Components:
-# - st.dataframe(editable=True) for mapping tables
-# - st.json() for config display
-# - st.info() boxes explaining each mapping's purpose
-# - Color coding: Green = active, Gray = inactive, Yellow = mock data
-# - st.warning() banner: "⚠️ Sample Configuration - Modify for your client"
-```
+1. **Client Config Tab**
+   - Client selector dropdown at top
+   - Status badge (Active/Inactive)
+   - Client details: system key, version, created by, description
+   - Full CONFIG_JSON display with st.json()
 
-### 5.5 Processing Settings Tab (in Configuration Page)
+2. **Form Mappings Tab**
+   - Read-only table of form-to-indicator mappings
+   - Columns: SOURCE_TABLE, FORM_IDENTIFIER, FIELD_NAME, MAPPED_INDICATOR, MAPPING_TYPE, IS_ACTIVE
+   - Detail list showing each mapping with notes
+
+3. **Indicator Overrides Tab**
+   - Read-only table of client-specific indicator overrides
+   - Columns: INDICATOR_ID, OVERRIDE_TYPE, OVERRIDE_VALUE, REASON, IS_ACTIVE
+
+4. **RAG Indicators Tab**
+   - Browse all 33 DRI indicators
+   - Filter by temporal type (All, chronic, acute, recurrent)
+   - Detail view with definition, inclusion/exclusion criteria
+
+5. **Processing Settings Tab** (see Section 5.5)
+
+### 5.5 Processing Settings Tab (IMPLEMENTED)
 
 The Processing Settings tab controls production batch processing configuration:
 
-```python
-# Processing Settings Features:
-# 1. Production Model Selection
-#    - Dropdown of available LLM models (Claude 4.5, Claude 3.5, etc.)
-#    - "Save Model for Production" button stores selection in DRI_CLIENT_CONFIG
-#    - Nightly batch uses saved production model
-#
-# 2. Production Prompt Version Selection  
-#    - Dropdown of saved prompt versions from DRI_PROMPT_VERSIONS
-#    - "Save Prompt for Production" button stores selection
-#    - Separates testing (any version) from production (locked version)
-#
-# 3. Batch Schedule Configuration
-#    - Dropdown for nightly batch start time (default: midnight)
-#    - Cron format stored in CONFIG_JSON:production_settings:batch_schedule
-#    - Options: Midnight, 1 AM, 2 AM, 3 AM, 4 AM, 5 AM, 6 AM
-#
-# 4. Adaptive Token Sizing
-#    - Context threshold configuration (default: 6,000 chars)
-#    - Standard mode (<threshold): 4,096 max_tokens
-#    - Large mode (>threshold): 16,384 max_tokens
-```
+**Implemented Features:**
+
+1. **Production Model Selection**
+   - Dropdown with models: claude-sonnet-4-5, claude-opus-4-5, claude-haiku-4-5, claude-3-5-sonnet, claude-3-7-sonnet, mistral-large2, llama3.1-70b, llama3.1-405b, llama3.3-70b, snowflake-llama-3.3-70b, deepseek-r1
+   - "Save model for production" button updates CONFIG_JSON:production_settings:model
+
+2. **Production Prompt Configuration**
+   - "Copy prompt from version" dropdown to load templates from DRI_PROMPT_VERSIONS
+   - "Load template" button copies selected version to editor
+   - Text area for editing production prompt
+   - Version label input for tracking
+   - "Save prompt for production" stores directly in CONFIG_JSON:production_settings:prompt_text
+
+3. **Batch Schedule Configuration**
+   - Dropdown for nightly batch start time (Midnight through 6 AM)
+   - Cron format stored in CONFIG_JSON:production_settings:batch_schedule
+   - Info box explaining delta processing
+
+4. **Adaptive Token Sizing**
+   - Context threshold number input (2,000-20,000 chars, default 6,000)
+   - Side-by-side comparison of Standard mode (4,096 tokens) vs Large mode (16,384 tokens)
+   - Trade-offs warning explaining threshold impact
+   - "Save for testing" (session only) vs "Save for production" buttons
 
 **Configuration JSON Structure:**
 ```json
@@ -749,37 +751,25 @@ The Processing Settings tab controls production batch processing configuration:
 }
 ```
 
-### 5.6 Page 7: Batch Testing (NEW)
+### 5.6 Page 7: Batch Testing (IMPLEMENTED)
 
 On-demand batch testing page for validating prompt/model configurations before production:
 
-```python
-# Batch Testing Features:
-# 1. Shows current production configuration (model, prompt, threshold)
-# 2. Date Range Filter
-#    - Select records by EVENT_DATE range
-#    - Defaults to last 30 days
-# 3. Resident Filter
-#    - Multi-select specific residents OR "All Residents"
-#    - Filter combined with date range
-# 4. Preview Panel
-#    - Shows count of residents to process
-#    - Total notes in selection
-#    - Estimated processing time
-# 5. Run Batch Button
-#    - Executes DRI analysis for each selected resident
-#    - Uses PRODUCTION model and prompt (not testing versions)
-#    - Progress bar with per-resident status
-#    - Stores results in DRI_LLM_ANALYSIS with batch_run_id
-# 6. Results Summary
-#    - Success/failure counts
-#    - Average processing time
-#    - Links to Analysis Results and Review Queue pages
+**Implemented Features:**
+1. **Client Selector** - Dropdown at top to select which client's production config to use
+2. **Production Config Display** - Shows current model, prompt version, context threshold
+3. **Date Range Filter** - Calendar inputs with auto-detected min/max dates from data
+4. **Resident Filter** - Multi-select specific residents or process all in range
+5. **Preview Panel** - Count of residents, total notes, estimated processing time
+6. **Run Batch Button** - Executes analysis with progress bar and per-resident status
+7. **Results Summary** - Success/failure counts, average processing time, batch ID
+8. **Adaptive Token Sizing** - Uses context_threshold from client config to select max_tokens
 
-# Key Difference from Prompt Engineering Page:
-# - Prompt Engineering: Test ANY model/prompt on single residents (experimentation)
-# - Batch Testing: Test PRODUCTION config on multiple residents (validation before deploy)
-```
+**Key Implementation Details:**
+- Batch ID (UUID) assigned to each run for tracking in DRI_LLM_ANALYSIS
+- Context size pre-query determines standard (4,096) vs large (16,384) max_tokens
+- Results stored with CLIENT_SYSTEM_KEY for multi-tenant tracking
+- Progress bar updates per-resident with status text
 
 #### Configuration Page Mockup
 

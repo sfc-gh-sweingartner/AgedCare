@@ -5,12 +5,45 @@ sys.path.insert(0, '/Users/sweingartner/CoCo/AgedCare/dri-intelligence')
 
 from src.connection_helper import get_snowflake_session, execute_query_df, execute_query
 
-st.set_page_config(page_title="Configuration", page_icon="⚙️", layout="wide")
-st.title("⚙️ Configuration")
-
 session = get_snowflake_session()
 
 if session:
+    with st.expander("How to use this page", expanded=False, icon=":material/help:"):
+        st.markdown("""
+### Purpose
+This is the **administration hub** for configuring the DRI Intelligence system. It contains client settings, form mappings, indicator definitions, and **production deployment settings**.
+
+### Tabs Overview
+
+| Tab | Purpose |
+|-----|---------|
+| **Client Config** | View/edit client details and full JSON configuration |
+| **Form Mappings** | See how client-specific form fields map to DRI indicators |
+| **Indicator Overrides** | Client-specific customizations to indicator behavior |
+| **RAG Indicators** | Browse all 33 DRI indicator definitions (the knowledge base) |
+| **Processing Settings** | **Configure production model, prompt, and batch schedule** |
+
+### Processing Settings (Most Important)
+This tab controls what runs during **nightly batch processing**:
+- **Production Model**: Which LLM model to use (recommend Claude 4.5 variants)
+- **Production Prompt**: The exact prompt text used for batch analysis
+- **Batch Schedule**: When the nightly job runs (cron format)
+- **Adaptive Token Sizing**: Threshold for standard vs large token mode
+
+### Workflow
+1. Test prompts in the **Prompt Engineering** page
+2. Once satisfied, come here to **Processing Settings**
+3. Select your tested model and load your prompt template
+4. Click **Save for Production** to deploy
+5. The nightly batch will use these settings automatically
+
+### Tips
+- Always test thoroughly in Prompt Engineering before saving to production
+- Use **Claude vs Regex** comparison to validate accuracy improvements
+- The context threshold affects processing speed vs completeness tradeoff
+- Lower threshold = more residents use large mode (slower but complete)
+        """)
+
     clients = execute_query_df("""
         SELECT CONFIG_ID, CLIENT_SYSTEM_KEY, CLIENT_NAME, IS_ACTIVE
         FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG
@@ -20,25 +53,23 @@ if session:
     if clients is not None and len(clients) > 0:
         client_options = {f"{row['CLIENT_NAME']} ({row['CLIENT_SYSTEM_KEY']})": row['CONFIG_ID'] for _, row in clients.iterrows()}
         
-        st.markdown("### 🏢 Select Client")
+        st.subheader("Select client")
         selected_client_display = st.selectbox(
             "Client",
             list(client_options.keys()),
             help="All configuration changes will apply to the selected client"
         )
         selected_config_id = client_options[selected_client_display]
-        
-        st.markdown("---")
     else:
-        st.error("No clients found in configuration table")
+        st.error("No clients found in configuration table", icon=":material/error:")
         st.stop()
     
-    st.warning("⚠️ **SAMPLE DATA:** The configuration below is mocked for demonstration. Modify these mappings to match your client's specific system.")
+    st.warning("**Sample data:** The configuration below is mocked for demonstration. Modify these mappings to match your client's specific system.", icon=":material/warning:")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Client Config", "Form Mappings", "Indicator Overrides", "RAG Indicators", "Processing Settings"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Client config", "Form mappings", "Indicator overrides", "RAG indicators", "Processing settings"])
     
     with tab1:
-        st.subheader("Client Configuration")
+        st.subheader("Client configuration")
         
         config_data = execute_query_df(f"""
             SELECT CONFIG_ID, CLIENT_SYSTEM_KEY, CLIENT_NAME, DESCRIPTION, 
@@ -50,19 +81,21 @@ if session:
         
         if config_data is not None and len(config_data) > 0:
             row = config_data.iloc[0]
-            status = "🟢 Active" if row['IS_ACTIVE'] else "⚪ Inactive"
-            st.markdown(f"**Status:** {status}")
+            if row['IS_ACTIVE']:
+                st.badge("Active", icon=":material/check:", color="green")
+            else:
+                st.badge("Inactive", color="gray")
             
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown(f"**System Key:** `{row['CLIENT_SYSTEM_KEY']}`")
+                st.markdown(f"**System key:** `{row['CLIENT_SYSTEM_KEY']}`")
                 st.markdown(f"**Version:** {row['VERSION']}")
-                st.markdown(f"**Created By:** {row['CREATED_BY']}")
+                st.markdown(f"**Created by:** {row['CREATED_BY']}")
             with col2:
                 st.markdown(f"**Description:** {row['DESCRIPTION']}")
                 st.markdown(f"**Created:** {row['CREATED_TIMESTAMP']}")
             
-            st.markdown("**Full Configuration JSON:**")
+            st.markdown("**Full configuration JSON:**")
             try:
                 config_json = json.loads(row['CONFIG_JSON_TEXT'])
                 st.json(config_json)
@@ -70,8 +103,8 @@ if session:
                 st.code(row['CONFIG_JSON_TEXT'])
     
     with tab2:
-        st.subheader("Form Mappings")
-        st.info("Form mappings define how client-specific form fields map to standard DRI indicators.")
+        st.subheader("Form mappings")
+        st.caption("Form mappings define how client-specific form fields map to standard DRI indicators.")
         
         client_key = execute_query(f"""
             SELECT CLIENT_SYSTEM_KEY FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG WHERE CONFIG_ID = '{selected_config_id}'
@@ -90,19 +123,20 @@ if session:
             mappings_display = mappings[['SOURCE_TABLE', 'FORM_IDENTIFIER', 'FIELD_NAME', 'MAPPED_INDICATOR', 'MAPPING_TYPE', 'IS_ACTIVE']]
             st.dataframe(mappings_display, use_container_width=True)
             
-            st.markdown("---")
-            st.markdown("**Mapping Details:**")
+            st.markdown("**Mapping details:**")
             for idx, row in mappings.iterrows():
-                status = "🟢" if row['IS_ACTIVE'] else "⚪"
-                st.markdown(f"{status} **{row['FIELD_NAME']}** → `{row['MAPPED_INDICATOR']}` ({row['MAPPING_TYPE']})")
+                if row['IS_ACTIVE']:
+                    st.markdown(f":material/check_circle: **{row['FIELD_NAME']}** → `{row['MAPPED_INDICATOR']}` ({row['MAPPING_TYPE']})")
+                else:
+                    st.markdown(f":material/circle: **{row['FIELD_NAME']}** → `{row['MAPPED_INDICATOR']}` ({row['MAPPING_TYPE']})")
                 if row['NOTES']:
                     st.caption(f"   {row['NOTES']}")
         else:
-            st.info("No form mappings found for this client")
+            st.info("No form mappings found for this client", icon=":material/info:")
     
     with tab3:
-        st.subheader("Indicator Overrides")
-        st.info("Overrides allow clients to customize indicator behavior (thresholds, expiry days, etc.)")
+        st.subheader("Indicator overrides")
+        st.caption("Overrides allow clients to customize indicator behavior (thresholds, expiry days, etc.)")
         
         overrides = execute_query_df(f"""
             SELECT OVERRIDE_ID, CLIENT_SYSTEM_KEY, INDICATOR_ID, OVERRIDE_TYPE,
@@ -115,10 +149,10 @@ if session:
         if overrides is not None and len(overrides) > 0:
             st.dataframe(overrides, use_container_width=True)
         else:
-            st.info("No indicator overrides configured for this client")
+            st.info("No indicator overrides configured for this client", icon=":material/info:")
     
     with tab4:
-        st.subheader("DRI RAG Indicators (Knowledge Base)")
+        st.subheader("DRI RAG indicators (knowledge base)")
         
         indicators = execute_query_df("""
             SELECT INDICATOR_ID, INDICATOR_NAME, TEMPORAL_TYPE, DEFAULT_EXPIRY_DAYS,
@@ -128,17 +162,16 @@ if session:
         """, session)
         
         if indicators is not None and len(indicators) > 0:
-            st.metric("Total Indicators", len(indicators))
+            st.metric("Total indicators", len(indicators))
             
-            temporal_filter = st.selectbox("Filter by Type", ["All", "chronic", "acute", "recurrent"])
+            temporal_filter = st.selectbox("Filter by type", ["All", "chronic", "acute", "recurrent"])
             
             if temporal_filter != "All":
                 indicators = indicators[indicators['TEMPORAL_TYPE'] == temporal_filter]
             
             st.dataframe(indicators, use_container_width=True)
             
-            st.markdown("---")
-            selected_indicator = st.selectbox("View Details", indicators['INDICATOR_ID'].tolist())
+            selected_indicator = st.selectbox("View details", indicators['INDICATOR_ID'].tolist())
             
             if selected_indicator:
                 detail = execute_query_df(f"""
@@ -148,18 +181,19 @@ if session:
                 
                 if detail is not None and len(detail) > 0:
                     row = detail.iloc[0]
-                    st.markdown(f"### {row['INDICATOR_NAME']}")
-                    st.markdown(f"**Definition:** {row['DEFINITION']}")
-                    st.markdown(f"**Type:** {row['TEMPORAL_TYPE']}")
-                    st.markdown(f"**Expiry Days:** {row['DEFAULT_EXPIRY_DAYS'] or 'N/A (chronic)'}")
-                    st.markdown(f"**Include When:** {row['INCLUSION_CRITERIA']}")
-                    st.markdown(f"**Exclude When:** {row['EXCLUSION_CRITERIA']}")
+                    with st.container(border=True):
+                        st.markdown(f"### {row['INDICATOR_NAME']}")
+                        st.markdown(f"**Definition:** {row['DEFINITION']}")
+                        st.markdown(f"**Type:** {row['TEMPORAL_TYPE']}")
+                        st.markdown(f"**Expiry days:** {row['DEFAULT_EXPIRY_DAYS'] or 'N/A (chronic)'}")
+                        st.markdown(f"**Include when:** {row['INCLUSION_CRITERIA']}")
+                        st.markdown(f"**Exclude when:** {row['EXCLUSION_CRITERIA']}")
         else:
-            st.info("No indicators found")
+            st.info("No indicators found", icon=":material/info:")
 
     with tab5:
-        st.subheader("Processing Settings")
-        st.info("All production settings for nightly batch processing are stored per-client in this table. The batch job reads this configuration directly.")
+        st.subheader("Processing settings")
+        st.caption("All production settings for nightly batch processing are stored per-client in this table. The batch job reads this configuration directly.")
         
         db_production_config = execute_query(f"""
             SELECT 
@@ -178,7 +212,7 @@ if session:
         batch_schedule = db_production_config[0]['BATCH_SCHEDULE'] if db_production_config and db_production_config[0]['BATCH_SCHEDULE'] else '0 0 * * *'
         db_threshold = db_production_config[0]['CONTEXT_THRESHOLD'] if db_production_config and db_production_config[0]['CONTEXT_THRESHOLD'] else 6000
         
-        st.markdown("### 🤖 Production Model")
+        st.subheader("Production model")
         st.caption(f"Current production model: **{prod_model}**")
         
         model_options = [
@@ -197,13 +231,13 @@ if session:
         
         default_model_idx = model_options.index(prod_model) if prod_model in model_options else 3
         selected_prod_model = st.selectbox(
-            "Select Model for Production",
+            "Select model for production",
             model_options,
             index=default_model_idx,
             help="This model will be used by the nightly batch process"
         )
         
-        if st.button("🚀 Save Model for Production", key="save_model_prod"):
+        if st.button("Save model for production", key="save_model_prod", icon=":material/save:"):
             try:
                 execute_query(f"""
                     UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
@@ -220,13 +254,12 @@ if session:
                     MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
                     WHERE CONFIG_ID = '{selected_config_id}'
                 """, session)
-                st.success(f"Production model saved: **{selected_prod_model}**")
+                st.success(f"Production model saved: **{selected_prod_model}**", icon=":material/check_circle:")
                 st.rerun()
             except Exception as e:
-                st.error(f"Failed to save: {e}")
+                st.error(f"Failed to save: {e}", icon=":material/error:")
         
-        st.markdown("---")
-        st.markdown("### 📝 Production Prompt")
+        st.subheader("Production prompt")
         st.caption(f"Current prompt version: **{prod_prompt_version}**")
         
         prompt_versions = execute_query_df("""
@@ -240,7 +273,7 @@ if session:
             default_prompt_idx = version_list.index(prod_prompt_version) if prod_prompt_version in version_list else 0
             
             selected_version_for_copy = st.selectbox(
-                "Copy Prompt from Version (Template)",
+                "Copy prompt from version (template)",
                 version_list,
                 index=default_prompt_idx,
                 help="Select a prompt version template to copy, then customize below"
@@ -251,23 +284,23 @@ if session:
             
             template_prompt_text = selected_prompt_info['PROMPT_TEXT']
             
-            if st.button("📋 Load Template", key="load_template"):
+            if st.button("Load template", key="load_template", icon=":material/content_copy:"):
                 st.session_state['editing_prompt_text'] = template_prompt_text
                 st.rerun()
         
         default_prompt_display = st.session_state.get('editing_prompt_text', prod_prompt_text or template_prompt_text if 'template_prompt_text' in dir() else '')
         
-        st.markdown("**Production Prompt Text** (stored directly in client config):")
+        st.markdown("**Production prompt text** (stored directly in client config):")
         edited_prompt_text = st.text_area(
-            "Prompt Text",
+            "Prompt text",
             value=default_prompt_display,
             height=300,
             help="This exact prompt text will be used for nightly batch processing for this client"
         )
         
-        new_version_label = st.text_input("Version Label", value=prod_prompt_version, help="Label for this prompt version (e.g., v1.1, v2.0)")
+        new_version_label = st.text_input("Version label", value=prod_prompt_version, help="Label for this prompt version (e.g., v1.1, v2.0)")
         
-        if st.button("🚀 Save Prompt for Production", key="save_prompt_prod"):
+        if st.button("Save prompt for production", key="save_prompt_prod", icon=":material/save:"):
             try:
                 escaped_prompt = edited_prompt_text.replace("'", "''").replace("\\", "\\\\")
                 execute_query(f"""
@@ -288,15 +321,14 @@ if session:
                     MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
                     WHERE CONFIG_ID = '{selected_config_id}'
                 """, session)
-                st.success(f"Production prompt saved for **{selected_client_display}** as version **{new_version_label}**")
+                st.success(f"Production prompt saved for **{selected_client_display}** as version **{new_version_label}**", icon=":material/check_circle:")
                 if 'editing_prompt_text' in st.session_state:
                     del st.session_state['editing_prompt_text']
                 st.rerun()
             except Exception as e:
-                st.error(f"Failed to save: {e}")
+                st.error(f"Failed to save: {e}", icon=":material/error:")
         
-        st.markdown("---")
-        st.markdown("### ⏰ Batch Schedule")
+        st.subheader("Batch schedule")
         st.caption(f"Current schedule: **{batch_schedule}** (cron format)")
         
         schedule_options = {
@@ -313,16 +345,16 @@ if session:
         default_schedule = current_schedule_name[0] if current_schedule_name else "Midnight (00:00)"
         
         selected_schedule_name = st.selectbox(
-            "Nightly Batch Start Time",
+            "Nightly batch start time",
             list(schedule_options.keys()),
             index=list(schedule_options.keys()).index(default_schedule),
             help="When the nightly batch job runs to process delta records"
         )
         selected_schedule = schedule_options[selected_schedule_name]
         
-        st.info("**Delta Processing:** The nightly batch only processes records that have changed since the last successful run.")
+        st.info("**Delta processing:** The nightly batch only processes records that have changed since the last successful run.", icon=":material/info:")
         
-        if st.button("🚀 Save Schedule for Production", key="save_schedule_prod"):
+        if st.button("Save schedule for production", key="save_schedule_prod", icon=":material/save:"):
             try:
                 execute_query(f"""
                     UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
@@ -339,23 +371,19 @@ if session:
                     MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
                     WHERE CONFIG_ID = '{selected_config_id}'
                 """, session)
-                st.success(f"Batch schedule saved: **{selected_schedule_name}** ({selected_schedule})")
+                st.success(f"Batch schedule saved: **{selected_schedule_name}** ({selected_schedule})", icon=":material/check_circle:")
                 st.rerun()
             except Exception as e:
-                st.error(f"Failed to save: {e}")
+                st.error(f"Failed to save: {e}", icon=":material/error:")
         
-        st.markdown("---")
-        st.markdown("### 📊 Adaptive Token Sizing")
-        st.markdown("""
-        The LLM analysis uses **adaptive token sizing** to optimize performance during batch processing.
-        A pre-query measures each resident's context size (notes, meds, observations, forms) before calling the LLM.
-        """)
+        st.subheader("Adaptive token sizing")
+        st.caption("The LLM analysis uses adaptive token sizing to optimize performance during batch processing. A pre-query measures each resident's context size (notes, meds, observations, forms) before calling the LLM.")
         
         current_threshold = st.session_state.get('context_threshold', db_threshold)
         st.caption(f"Production value: **{db_threshold:,}** | Session value: **{current_threshold:,}**")
         
         new_threshold = st.number_input(
-            "Context Threshold (characters)",
+            "Context threshold (characters)",
             min_value=2000,
             max_value=20000,
             value=current_threshold,
@@ -365,31 +393,30 @@ if session:
         
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown("**Standard Mode** (below threshold)")
-            st.markdown("- `max_tokens`: 4,096")
-            st.markdown("- ⚡ ~2-3x faster")
-            st.markdown("- ✅ Ideal for residents with few notes")
+            with st.container(border=True):
+                st.markdown("**Standard mode** (below threshold)")
+                st.markdown("- `max_tokens`: 4,096")
+                st.markdown("- Fast processing")
+                st.markdown("- Ideal for residents with few notes")
         with col2:
-            st.markdown("**Large Mode** (above threshold)")
-            st.markdown("- `max_tokens`: 16,384")
-            st.markdown("- 🐢 Slower processing")
-            st.markdown("- ✅ Prevents truncation for complex cases")
+            with st.container(border=True):
+                st.markdown("**Large mode** (above threshold)")
+                st.markdown("- `max_tokens`: 16,384")
+                st.markdown("- Slower processing")
+                st.markdown("- Prevents truncation for complex cases")
         
-        st.markdown("#### Trade-offs")
-        st.warning("""
-        **↓ Lower threshold** = More residents use large mode = Slower batch, but fewer truncation failures  
-        **↑ Higher threshold** = More residents use standard mode = Faster batch, but risk truncation for data-heavy residents
-        """)
+        st.subheader("Trade-offs")
+        st.warning("**Lower threshold** = More residents use large mode = Slower batch, but fewer truncation failures. **Higher threshold** = More residents use standard mode = Faster batch, but risk truncation for data-heavy residents.", icon=":material/warning:")
         
-        btn_col1, btn_col2 = st.columns(2)
-        with btn_col1:
-            if st.button("🧪 Save for Testing", type="secondary", use_container_width=True):
+        col_btn1, col_btn2, col_spacer = st.columns([1, 1, 2])
+        with col_btn1:
+            if st.button("Save for testing", icon=":material/science:", use_container_width=True):
                 st.session_state['context_threshold'] = new_threshold
-                st.success(f"Session threshold set to {new_threshold:,} characters")
+                st.success(f"Session threshold set to {new_threshold:,} characters", icon=":material/check_circle:")
                 st.caption("This value will be used for interactive testing in this session.")
         
-        with btn_col2:
-            if st.button("🚀 Save for Production", type="primary", use_container_width=True, key="save_threshold_prod"):
+        with col_btn2:
+            if st.button("Save for production", type="primary", key="save_threshold_prod", icon=":material/save:", use_container_width=True):
                 try:
                     execute_query(f"""
                         UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
@@ -404,10 +431,10 @@ if session:
                         WHERE CONFIG_ID = '{selected_config_id}'
                     """, session)
                     st.session_state['context_threshold'] = new_threshold
-                    st.success(f"Production threshold saved: {new_threshold:,} characters")
+                    st.success(f"Production threshold saved: {new_threshold:,} characters", icon=":material/check_circle:")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Failed to save: {e}")
+                    st.error(f"Failed to save: {e}", icon=":material/error:")
 
 else:
-    st.error("Failed to connect to Snowflake")
+    st.error("Failed to connect to Snowflake", icon=":material/error:")
