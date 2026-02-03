@@ -2,29 +2,48 @@ import streamlit as st
 
 st.set_page_config(
     page_title="DRI Intelligence",
-    page_icon=":material/local_hospital:",
+    page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 from src.connection_helper import get_snowflake_session, execute_query_df
 
-page = st.navigation([
-    st.Page("app_pages/dashboard.py", title="Dashboard", icon=":material/dashboard:", default=True),
-    st.Page("app_pages/prompt_engineering.py", title="Prompt engineering", icon=":material/science:"),
-    st.Page("app_pages/review_queue.py", title="Review queue", icon=":material/checklist:"),
-    st.Page("app_pages/analysis_results.py", title="Analysis results", icon=":material/analytics:"),
-    st.Page("app_pages/configuration.py", title="Configuration", icon=":material/settings:"),
-    st.Page("app_pages/comparison.py", title="Claude vs Regex", icon=":material/compare_arrows:"),
-    st.Page("app_pages/quality_metrics.py", title="Quality metrics", icon=":material/monitoring:"),
-], position="sidebar")
+PAGES = {
+    "Dashboard": "app_pages/dashboard.py",
+    "Prompt engineering": "app_pages/prompt_engineering.py",
+    "Review queue": "app_pages/review_queue.py",
+    "Analysis results": "app_pages/analysis_results.py",
+    "Configuration": "app_pages/configuration.py",
+    "Claude vs Regex": "app_pages/comparison.py",
+    "Quality metrics": "app_pages/quality_metrics.py",
+}
 
-st.title(f"{page.icon} {page.title}")
+PAGE_ICONS = {
+    "Dashboard": "📊",
+    "Prompt engineering": "🔬",
+    "Review queue": "✅",
+    "Analysis results": "📈",
+    "Configuration": "⚙️",
+    "Claude vs Regex": "⚖️",
+    "Quality metrics": "📉",
+}
 
-if page.title == "Dashboard":
+st.sidebar.title("DRI Intelligence")
+st.sidebar.caption("AI-powered clinical analysis")
+
+selection = st.sidebar.radio(
+    "Navigate to",
+    list(PAGES.keys()),
+    format_func=lambda x: f"{PAGE_ICONS.get(x, '')} {x}"
+)
+
+st.title(f"{PAGE_ICONS.get(selection, '')} {selection}")
+
+if selection == "Dashboard":
     st.caption("Deteriorating Resident Index - AI-powered clinical analysis")
     
-    with st.expander("How to use this application", expanded=False, icon=":material/help:"):
+    with st.expander("How to use this application", expanded=False):
         st.markdown("""
 ### What is DRI Intelligence?
 This application uses AI (Claude LLM) to detect health indicators in aged care resident records, replacing the traditional regex/keyword matching approach that has a ~10% false positive rate. The goal is to achieve <1% false positives.
@@ -33,9 +52,9 @@ This application uses AI (Claude LLM) to detect health indicators in aged care r
 1. **Configure** your client settings and production prompt in the **Configuration** page
 2. **Test & tune** prompts on individual residents in **Prompt Engineering**
 3. **Compare** Claude vs Regex results in **Claude vs Regex** to validate accuracy
-4. **Run batch tests** on multiple residents in **Batch Testing**
-5. **Review & approve** DRI changes in the **Review Queue**
-6. **Monitor** results in **Analysis Results** and this **Dashboard**
+4. **Review & approve** DRI changes in the **Review Queue**
+5. **Monitor** results in **Analysis Results** and this **Dashboard**
+6. **Track quality** over time in **Quality Metrics**
 
 ### Page Guide
 | Page | Purpose |
@@ -78,8 +97,9 @@ This application uses AI (Claude LLM) to detect health indicators in aged care r
             with cols[3]:
                 st.metric("Analyses run", metrics['analyses'])
         
-        st.caption(":material/check_circle: Connected to Snowflake")
+        st.success("Connected to Snowflake")
     else:
-        st.error("Failed to connect to Snowflake. Check your connection settings.", icon=":material/error:")
+        st.error("Failed to connect to Snowflake. Check your connection settings.")
 
-page.run()
+else:
+    exec(open(PAGES[selection]).read())
