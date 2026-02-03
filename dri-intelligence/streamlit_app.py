@@ -16,7 +16,7 @@ page = st.navigation([
     st.Page("app_pages/analysis_results.py", title="Analysis results", icon=":material/analytics:"),
     st.Page("app_pages/configuration.py", title="Configuration", icon=":material/settings:"),
     st.Page("app_pages/comparison.py", title="Claude vs Regex", icon=":material/compare_arrows:"),
-    st.Page("app_pages/batch_testing.py", title="Batch testing", icon=":material/labs:"),
+    st.Page("app_pages/quality_metrics.py", title="Quality metrics", icon=":material/monitoring:"),
 ], position="sidebar")
 
 st.title(f"{page.icon} {page.title}")
@@ -45,8 +45,8 @@ This application uses AI (Claude LLM) to detect health indicators in aged care r
 | **Review Queue** | Approve/reject AI-detected DRI indicator changes |
 | **Analysis Results** | Browse historical LLM analysis outputs |
 | **Configuration** | Client settings, form mappings, production model/prompt |
-| **Claude vs Regex** | Side-by-side comparison showing false positive reduction |
-| **Batch Testing** | Run analysis on multiple residents using production config |
+| **Claude vs Regex** | Side-by-side comparison showing false positive reduction (demo) |
+| **Quality Metrics** | AI Observability metrics - groundedness, relevance, FP rates |
         """)
     
     session = get_snowflake_session()

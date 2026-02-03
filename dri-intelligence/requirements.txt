@@ -3,3 +3,9 @@ snowflake-connector-python[pandas]>=3.0.0
 snowflake-snowpark-python>=1.0.0
 pandas>=2.0.0
 openpyxl>=3.0.0
+
+# AI Observability (TruLens) - for quality metrics and evaluation
+# Note: TruLens cannot run in Snowflake Notebooks, only in SPCS or external environments
+trulens-core>=2.1.2
+trulens-connectors-snowflake>=2.1.2
+trulens-providers-cortex>=2.1.2

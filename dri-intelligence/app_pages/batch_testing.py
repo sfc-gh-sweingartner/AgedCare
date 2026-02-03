@@ -152,7 +152,7 @@ if session:
             min_date = datetime.now().date() - timedelta(days=365)
             max_date = datetime.now().date()
         
-        date_from = st.date_input("From date", value=max(min_date, max_date - timedelta(days=30)), min_value=min_date, max_value=max_date)
+        date_from = st.date_input("From date", value=min_date, min_value=min_date, max_value=max_date)
         date_to = st.date_input("To date", value=max_date, min_value=min_date, max_value=max_date)
     
     with col_filter2:
@@ -366,19 +366,22 @@ if session:
                     except (json.JSONDecodeError, TypeError):
                         response_text = raw_response
                     
+                    safe_response = response_text[:60000] if len(response_text) > 60000 else response_text
+                    safe_response_escaped = safe_response.replace("'", "''")
                     insert_query = f"""
                         INSERT INTO AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
                         (RESIDENT_ID, CLIENT_SYSTEM_KEY, MODEL_USED, PROMPT_VERSION, 
                          RAW_RESPONSE, PROCESSING_TIME_MS, BATCH_RUN_ID)
-                        VALUES (
+                        SELECT
                             {resident_id},
                             '{selected_client_key}',
                             '{prod_model}',
                             '{prod_prompt_version}',
-                            PARSE_JSON($${json.dumps({"response": response_text})}$$),
+                            TRY_PARSE_JSON('{{
+                                "response": "' || REGEXP_REPLACE('{safe_response_escaped}', '[\\\\x00-\\\\x1F]', ' ') || '"
+                            }}'),
                             {processing_time},
                             '{batch_id}'
-                        )
                     """
                     execute_query(insert_query, session)
                     
