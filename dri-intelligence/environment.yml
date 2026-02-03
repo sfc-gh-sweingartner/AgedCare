@@ -3,6 +3,6 @@ channels:
   - snowflake
 dependencies:
   - streamlit=1.52.2
-  - pandas>=2.0.0
-  - openpyxl>=3.0.0
-  - snowflake-snowpark-python>=1.0.0
+  - pandas
+  - openpyxl
+  - snowflake-snowpark-python
