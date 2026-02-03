@@ -1,6 +1,8 @@
 import streamlit as st
 import json
 import re
+import sys
+sys.path.insert(0, '/Users/sweingartner/CoCo/AgedCare/dri-intelligence')
 
 from src.connection_helper import get_snowflake_session, execute_query_df, execute_query
 
@@ -255,26 +257,6 @@ if session:
                     ORDER BY DRI_DEFICIT_ID
                 """, session)
                 
-                indicator_mapping = execute_query_df("""
-                    SELECT REGEX_CODE, REGEX_NAME, CLAUDE_CODE, CLAUDE_NAME, NOTES
-                    FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_MAPPING
-                    WHERE IS_EQUIVALENT = TRUE
-                """, session)
-                regex_to_claude = {}
-                claude_to_regex = {}
-                if indicator_mapping is not None:
-                    for _, row in indicator_mapping.iterrows():
-                        regex_to_claude[row['REGEX_CODE']] = {
-                            'claude_code': row['CLAUDE_CODE'],
-                            'claude_name': row['CLAUDE_NAME'],
-                            'notes': row['NOTES']
-                        }
-                        claude_to_regex[row['CLAUDE_CODE']] = {
-                            'regex_code': row['REGEX_CODE'],
-                            'regex_name': row['REGEX_NAME'],
-                            'notes': row['NOTES']
-                        }
-                
                 regex_start = time.time()
                 regex_results = run_regex_detection(resident_context, keyword_df)
                 regex_time = int((time.time() - regex_start) * 1000)
@@ -301,7 +283,7 @@ if session:
                             }}
                         ],
                         {{
-                            'max_tokens': 16384
+                            'max_tokens': 8192
                         }}
                     ) as RESPONSE
                 """
@@ -375,29 +357,9 @@ if session:
                         with st.container(border=True):
                             st.markdown("### Difference")
                             
-                            both = set()
-                            equivalent_matches = []
-                            
-                            exact_matches = claude_detected_ids & regex_detected_ids
-                            both.update(exact_matches)
-                            
-                            for claude_id in claude_detected_ids:
-                                if claude_id in claude_to_regex:
-                                    equiv_regex_id = claude_to_regex[claude_id]['regex_code']
-                                    if equiv_regex_id in regex_detected_ids:
-                                        both.add(claude_id)
-                                        equivalent_matches.append({
-                                            'claude_id': claude_id,
-                                            'regex_id': equiv_regex_id,
-                                            'name': claude_indicators.get(claude_id, {}).get('deficit_name', claude_to_regex[claude_id]['regex_name']),
-                                            'notes': claude_to_regex[claude_id]['notes']
-                                        })
-                            
-                            matched_regex_ids = {m['regex_id'] for m in equivalent_matches}
-                            matched_claude_ids = {m['claude_id'] for m in equivalent_matches}
-                            
-                            only_claude = claude_detected_ids - regex_detected_ids - matched_claude_ids
-                            only_regex = regex_detected_ids - claude_detected_ids - matched_regex_ids
+                            only_claude = claude_detected_ids - regex_detected_ids
+                            only_regex = regex_detected_ids - claude_detected_ids
+                            both = claude_detected_ids & regex_detected_ids
                             
                             st.metric("Both agree", len(both))
                             st.metric("Only Claude", len(only_claude), help="Claude detected, regex missed")
@@ -416,47 +378,13 @@ if session:
                     
                     with agree_tab:
                         if both:
-                            if equivalent_matches:
-                                st.info(f"**Note:** {len(equivalent_matches)} indicator(s) matched via equivalent code mapping (different code systems, same condition)", icon=":material/link:")
-                            
-                            for ind_id in sorted(exact_matches):
+                            for ind_id in sorted(both):
                                 claude_ind = claude_indicators.get(ind_id, {})
                                 regex_ind = regex_results.get(ind_id, {})
                                 
                                 confidence = claude_ind.get('confidence', 'N/A')
                                 
                                 with st.expander(f"{ind_id} - {claude_ind.get('deficit_name', regex_ind.get('indicator_name', 'Unknown'))} ({confidence})", icon=":material/check_circle:"):
-                                    col_cl, col_rx = st.columns(2)
-                                    
-                                    with col_cl:
-                                        st.markdown("**Claude analysis:**")
-                                        with st.container(border=True):
-                                            st.write(claude_ind.get('reasoning', 'N/A'))
-                                        
-                                        if claude_ind.get('evidence'):
-                                            st.markdown("**Evidence:**")
-                                            for ev in claude_ind['evidence'][:2]:
-                                                st.caption(f"{ev.get('source_table', 'N/A')}: {ev.get('text_excerpt', 'N/A')[:100]}...")
-                                    
-                                    with col_rx:
-                                        st.markdown("**Regex matches:**")
-                                        with st.container(border=True):
-                                            st.write(f"Found {regex_ind.get('match_count', 0)} keyword matches")
-                                        
-                                        if regex_ind.get('matches'):
-                                            st.markdown("**Matched text:**")
-                                            for m in regex_ind['matches'][:2]:
-                                                st.caption(f"...{m}...")
-                            
-                            for match in equivalent_matches:
-                                claude_ind = claude_indicators.get(match['claude_id'], {})
-                                regex_ind = regex_results.get(match['regex_id'], {})
-                                confidence = claude_ind.get('confidence', 'N/A')
-                                
-                                with st.expander(f"{match['claude_id']} / {match['regex_id']} - {match['name']} ({confidence}) [Equivalent codes]", icon=":material/link:"):
-                                    st.success(f"**Code mapping:** {match['notes']}", icon=":material/swap_horiz:")
-                                    st.caption(f"Claude code: `{match['claude_id']}` | Regex code: `{match['regex_id']}`")
-                                    
                                     col_cl, col_rx = st.columns(2)
                                     
                                     with col_cl:
