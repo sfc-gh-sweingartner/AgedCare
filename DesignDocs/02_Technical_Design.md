@@ -3,7 +3,7 @@
 ## Document Information
 | Field | Value |
 |-------|-------|
-| Version | 1.2 |
+| Version | 1.3 |
 | Created | 2026-01-28 |
 | Status | Approved |
 | Prerequisite | Functional Design v1.3 (Approved) |
@@ -344,7 +344,91 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_AUDIT_LOG (
 );
 ```
 
-### 2.4 Cortex Search Service
+### 2.4 AI Observability Tables
+
+```sql
+-- ============================================================================
+-- AI OBSERVABILITY TABLES (TruLens Integration)
+-- ============================================================================
+
+-- Evaluation Metrics (Aggregate per evaluation run)
+CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS (
+    EVALUATION_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
+    EVALUATION_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    MODEL_USED VARCHAR(64),
+    PROMPT_VERSION VARCHAR(32),
+    RESIDENTS_EVALUATED NUMBER,
+    AVG_GROUNDEDNESS FLOAT,
+    AVG_CONTEXT_RELEVANCE FLOAT,
+    AVG_ANSWER_RELEVANCE FLOAT,
+    FALSE_POSITIVE_COUNT NUMBER,
+    TRUE_POSITIVE_COUNT NUMBER,
+    FALSE_POSITIVE_RATE FLOAT,
+    EVALUATION_NOTES VARCHAR(16777216),
+    CREATED_BY VARCHAR(256),
+    PRIMARY KEY (EVALUATION_ID)
+);
+
+-- Evaluation Detail (Per-resident evaluation results)
+CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_EVALUATION_DETAIL (
+    DETAIL_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
+    EVALUATION_ID VARCHAR(36) NOT NULL,
+    RESIDENT_ID NUMBER NOT NULL,
+    GROUNDEDNESS_SCORE FLOAT,
+    CONTEXT_RELEVANCE_SCORE FLOAT,
+    ANSWER_RELEVANCE_SCORE FLOAT,
+    INDICATORS_DETECTED NUMBER,
+    FALSE_POSITIVES NUMBER,
+    TRUE_POSITIVES NUMBER,
+    FP_INDICATORS VARIANT,
+    TP_INDICATORS VARIANT,
+    RAW_EVALUATION_JSON VARIANT,
+    PRIMARY KEY (DETAIL_ID),
+    FOREIGN KEY (EVALUATION_ID) REFERENCES DRI_EVALUATION_METRICS(EVALUATION_ID)
+);
+
+-- Ground Truth (Validated test cases for accuracy measurement)
+CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH (
+    GROUND_TRUTH_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
+    RESIDENT_ID NUMBER NOT NULL,
+    INDICATOR_ID VARCHAR(64) NOT NULL,
+    EXPECTED_DETECTED BOOLEAN NOT NULL,
+    EVIDENCE_SUMMARY VARCHAR(16777216),
+    VALIDATED_BY VARCHAR(256),
+    VALIDATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    SOURCE_REVIEW_ID VARCHAR(36),
+    IS_ACTIVE BOOLEAN DEFAULT TRUE,
+    PRIMARY KEY (GROUND_TRUTH_ID)
+);
+
+-- View: Evaluation Summary (for dashboard)
+CREATE OR REPLACE VIEW AGEDCARE.AGEDCARE.V_EVALUATION_SUMMARY AS
+SELECT 
+    EVALUATION_ID,
+    EVALUATION_TIMESTAMP,
+    MODEL_USED,
+    PROMPT_VERSION,
+    RESIDENTS_EVALUATED,
+    ROUND(AVG_GROUNDEDNESS * 100, 1) AS GROUNDEDNESS_PCT,
+    ROUND(AVG_CONTEXT_RELEVANCE * 100, 1) AS CONTEXT_RELEVANCE_PCT,
+    ROUND(AVG_ANSWER_RELEVANCE * 100, 1) AS ANSWER_RELEVANCE_PCT,
+    ROUND(FALSE_POSITIVE_RATE * 100, 2) AS FP_RATE_PCT,
+    CASE WHEN FALSE_POSITIVE_RATE < 0.01 THEN 'PASS' ELSE 'FAIL' END AS FP_TARGET_STATUS
+FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
+ORDER BY EVALUATION_TIMESTAMP DESC;
+
+-- View: FP Rate Trend (for trend chart)
+CREATE OR REPLACE VIEW AGEDCARE.AGEDCARE.V_FP_RATE_TREND AS
+SELECT 
+    DATE_TRUNC('day', EVALUATION_TIMESTAMP) AS EVAL_DATE,
+    AVG(FALSE_POSITIVE_RATE) * 100 AS AVG_FP_RATE_PCT,
+    COUNT(*) AS EVAL_COUNT
+FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
+GROUP BY DATE_TRUNC('day', EVALUATION_TIMESTAMP)
+ORDER BY EVAL_DATE;
+```
+
+### 2.5 Cortex Search Service
 
 ```sql
 -- ============================================================================
@@ -632,15 +716,16 @@ dri-intelligence/
 ├── streamlit_app.py           # Main entry point with st.navigation()
 ├── app_pages/                  # Page modules (loaded via st.Page)
 │   ├── dashboard.py            # Dashboard - Overview metrics
-│   ├── prompt_engineering.py   # Prompt Engineering - Test/tune prompts
+│   ├── prompt_engineering.py   # Prompt Engineering - Test/tune prompts + Evaluation
 │   ├── review_queue.py         # Review Queue - Approval workflow
 │   ├── analysis_results.py     # Analysis Results - View LLM output
 │   ├── configuration.py        # Configuration - Client & processing settings
-│   ├── comparison.py           # Claude vs Regex - Detection comparison
-│   └── batch_testing.py        # Batch Testing - Multi-resident runs
+│   ├── comparison.py           # Claude vs Regex - DEMO ONLY (to be removed)
+│   └── quality_metrics.py      # Quality Metrics - AI Observability dashboard
 ├── src/
 │   ├── connection_helper.py    # Snowflake session management
-│   └── dri_analysis.py         # LLM analysis functions
+│   ├── dri_analysis.py         # LLM analysis functions
+│   └── ai_observability.py     # TruLens integration for AI metrics
 └── requirements.txt
 ```
 
@@ -650,8 +735,8 @@ dri-intelligence/
 - Review queue (:material/checklist:)
 - Analysis results (:material/analytics:)
 - Configuration (:material/settings:)
-- Claude vs Regex (:material/compare_arrows:)
-- Batch testing (:material/labs:)
+- Claude vs Regex (:material/compare_arrows:) - DEMO ONLY
+- Quality metrics (:material/monitoring:)
 
 ### 5.2 Page 2: Prompt Engineering / Model Testing (Key Page)
 
@@ -751,25 +836,53 @@ The Processing Settings tab controls production batch processing configuration:
 }
 ```
 
-### 5.6 Page 7: Batch Testing (IMPLEMENTED)
+### 5.6 Page 6: Claude vs Regex Comparison (DEMO ONLY)
 
-On-demand batch testing page for validating prompt/model configurations before production:
+**Note**: This page exists for demonstration purposes only to show stakeholders the accuracy improvement of Claude over regex. It will be removed after the demo.
+
+- Demo warning banner at top
+- Side-by-side DRI score comparison
+- Detailed indicator breakdown
+
+### 5.7 Page 7: Quality Metrics (AI Observability)
+
+This page surfaces AI Observability metrics in a clinician-friendly format:
 
 **Implemented Features:**
-1. **Client Selector** - Dropdown at top to select which client's production config to use
-2. **Production Config Display** - Shows current model, prompt version, context threshold
-3. **Date Range Filter** - Calendar inputs with auto-detected min/max dates from data
-4. **Resident Filter** - Multi-select specific residents or process all in range
-5. **Preview Panel** - Count of residents, total notes, estimated processing time
-6. **Run Batch Button** - Executes analysis with progress bar and per-resident status
-7. **Results Summary** - Success/failure counts, average processing time, batch ID
-8. **Adaptive Token Sizing** - Uses context_threshold from client config to select max_tokens
 
-**Key Implementation Details:**
-- Batch ID (UUID) assigned to each run for tracking in DRI_LLM_ANALYSIS
-- Context size pre-query determines standard (4,096) vs large (16,384) max_tokens
-- Results stored with CLIENT_SYSTEM_KEY for multi-tenant tracking
-- Progress bar updates per-resident with status text
+1. **Current Quality Status**
+   - Overall groundedness score (target >90%)
+   - Context relevance score (target >85%)
+   - Answer relevance score (target >85%)
+   - Current false positive rate (target <1%)
+   - Trend indicators (improving/declining)
+
+2. **False Positive Rate Trend Chart**
+   - Line chart showing FP rate over time
+   - Target line at 1%
+   - Date range filtering
+
+3. **Run Evaluation Section**
+   - Resident selector for evaluation
+   - Model/prompt selection
+   - "Run Evaluation" button triggers TruLens assessment
+   - Progress indicator during evaluation
+
+4. **Evaluation History Table**
+   - List of all evaluation runs
+   - Columns: Date, Residents, Model, Groundedness, FP Rate, Status
+   - Click to drill down to per-resident details
+
+5. **Ground Truth Management**
+   - View/manage validated test cases in DRI_GROUND_TRUTH
+   - Add new ground truth from approved review items
+   - Export ground truth for external validation
+
+**Technical Integration:**
+- Uses `ai_observability.py` module with TruLens packages
+- Stores metrics in DRI_EVALUATION_METRICS and DRI_EVALUATION_DETAIL tables
+- TruLens computes groundedness using LLM-as-judge pattern
+- No fallback code - errors displayed if TruLens not installed
 
 #### Configuration Page Mockup
 
@@ -1079,7 +1192,13 @@ streamlit>=1.28.0
 snowflake-connector-python[pandas]>=3.0.0
 snowflake-snowpark-python>=1.0.0
 pandas>=2.0.0
+trulens-core>=1.0.0
+trulens-connectors-snowflake>=1.0.0
+trulens-providers-cortex>=1.0.0
+backports.tarfile>=1.0.0
 ```
+
+**Note**: TruLens packages are required for AI Observability functionality. The application will raise an ImportError if these are not installed - there is no fallback code by design.
 
 ### 8.3 SPCS Service Definition
 
@@ -1454,13 +1573,15 @@ The warehouse `MYWH` is used ONLY for:
 
 ---
 
-*Document Version: 1.1*  
+*Document Version: 1.3*  
 *Created: 2026-01-28*  
-*Updated: 2026-01-28*  
-*Status: Draft - Ready for Review*
+*Updated: 2026-02-03*  
+*Status: Approved*
 
 ### Change Log
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-01-28 | Initial draft |
 | 1.1 | 2026-01-28 | Added: Comprehensive automated testing (Section 10), Client configuration UI details (Section 5.4), Sample client mappings (Section 6), Compute resource clarification (Section 12), Changed warehouse to MYWH |
+| 1.2 | 2026-01-30 | Implementation sync with functional design v1.4 |
+| 1.3 | 2026-02-03 | AI Observability integration: Added DRI_EVALUATION_METRICS, DRI_EVALUATION_DETAIL, DRI_GROUND_TRUTH tables (Section 2.4), added ai_observability.py module, replaced batch_testing.py with quality_metrics.py, added TruLens packages to requirements.txt, marked Claude vs Regex as demo-only |

@@ -112,6 +112,7 @@ This document defines the functional design for replacing Telstra Health's regex
 | Prompt Engineering UI | Business user prompt tuning | Streamlit on SPCS |
 | Review Queue | Human approval workflow | Snowflake tables + Streamlit |
 | Batch Processor | Scheduled analysis runs | Snowflake Notebook/Task |
+| AI Observability | Quality metrics & evaluation | TruLens + Snowflake AI Observability |
 
 ---
 
@@ -396,6 +397,22 @@ This formula:
 
 **Critical Requirement**: Every LLM-identified deficit must link back to source records.
 
+### 2.8.1 AI Observability Integration
+
+The solution integrates with Snowflake AI Observability for continuous quality monitoring:
+
+| Metric | Purpose | Target |
+|--------|---------|--------|
+| **Groundedness** | Measures if LLM response is grounded in resident data | >90% |
+| **Context Relevance** | Measures if retrieved RAG context is relevant | >85% |
+| **Answer Relevance** | Measures if response addresses the clinical query | >85% |
+| **False Positive Rate** | Tracks incorrect indicator detections over time | <1% |
+
+**Architecture Decision**: Hybrid approach
+- **Streamlit UI**: Clinician-facing interface (user-friendly for non-technical users)
+- **AI Observability Backend**: Metrics storage, audit trail for compliance
+- **Quality Metrics Page**: Surfaces AI Observability data in Streamlit for business users
+
 | Traceability Field | Description | Example |
 |--------------------|-------------|---------|
 | source_table | Which of the 6 tables | ACTIVE_RESIDENT_NOTES |
@@ -656,12 +673,12 @@ CREATE OR REPLACE CORTEX SEARCH SERVICE dri_indicator_search
 ```
 DRI Intelligence POC (Implemented)
 ├── dashboard.py              :material/dashboard:     (Overview metrics and status)
-├── prompt_engineering.py     :material/science:       (Edit and test prompts)
+├── prompt_engineering.py     :material/science:       (Edit and test prompts + Run Evaluation)
 ├── review_queue.py           :material/checklist:     (Human approval workflow)
 ├── analysis_results.py       :material/analytics:     (View LLM analysis details)
 ├── configuration.py          :material/settings:      (Settings, RAG, client config)
-├── comparison.py             :material/compare_arrows: (Claude vs Regex comparison)
-└── batch_testing.py          :material/labs:          (Batch test runs)
+├── comparison.py             :material/compare_arrows: (Claude vs Regex - DEMO ONLY)
+└── quality_metrics.py        :material/monitoring:    (AI Observability quality metrics)
 ```
 
 **Navigation:** Uses `st.navigation()` with Material icons (implemented in streamlit_app.py)
@@ -708,26 +725,24 @@ DRI Intelligence POC (Implemented)
 - **RAG Indicators Tab**: Browse all 33 indicators with filtering
 - **Processing Settings Tab**: Production model, prompt, schedule, token threshold
 
-#### Page 6: Claude vs Regex Comparison (IMPLEMENTED - NEW)
+#### Page 6: Claude vs Regex Comparison (DEMO ONLY - To Be Removed)
+**Note**: This page is for demonstration purposes only to show stakeholders the accuracy improvement of Claude over regex. It will be removed after the demo is complete.
 - Side-by-side DRI score comparison
-- Resident and model selector
-- Context preview expander
-- Three-column comparison (Claude, Regex, Difference)
-- Detailed indicator breakdown tabs:
-  - Both Agree: Indicators detected by both methods
-  - Claude Only: True positives missed by regex
-  - Regex Only: Likely false positives
-- Raw JSON response viewer
-- Formula reference panel
+- Demo warning banner displayed at top
+- Detailed indicator breakdown tabs
 
-#### Page 7: Batch Testing (IMPLEMENTED - NEW)
-- Client selector for production config
-- Production config display (model, prompt version, threshold)
-- Date range filter with auto-detected bounds
-- Resident multi-select filter
-- Preview panel (count, notes, estimated time)
-- Run batch button with progress bar
-- Results summary with batch ID
+#### Page 7: Quality Metrics (IMPLEMENTED - AI Observability)
+This page surfaces AI Observability metrics in a clinician-friendly format:
+- **Current Quality Status**: Latest evaluation groundedness, context relevance, answer relevance, FP rate
+- **False Positive Rate Trend**: Chart showing FP rate over time with <1% target line
+- **Run Evaluation**: Form to trigger new evaluation with prompt/model selection
+- **Evaluation History**: List of all evaluation runs with drill-down to per-resident details
+- **Ground Truth Management**: Manage validated test cases for accuracy measurement
+
+**Technical Integration**:
+- Uses TruLens for LLM-as-judge evaluation (groundedness, relevance scores)
+- Stores metrics in DRI_EVALUATION_METRICS and DRI_EVALUATION_DETAIL tables
+- TruLens packages required (no fallback - errors shown if not installed)
 
 ---
 
@@ -840,6 +855,7 @@ Existing ETL ──▶ 6 Source Tables ──▶ Client Config ──▶ LLM Eng
 - Mobile interface
 - Multi-client onboarding automation
 - Automated prompt optimization
+- Full TruLens OTEL tracing (currently using direct LLM-as-judge evaluation)
 
 ### 8.3 Success Criteria
 1. False positive rate <1% on test dataset
@@ -865,8 +881,8 @@ Existing ETL ──▶ 6 Source Tables ──▶ Client Config ──▶ LLM Eng
 | Review Queue page | ✅ Complete | Aggregate approval workflow |
 | Analysis Results page | ✅ Complete | Browse LLM analyses |
 | Configuration page | ✅ Complete | 5 tabs including processing settings |
-| Claude vs Regex page | ✅ Complete | Side-by-side comparison with FP detection |
-| Batch Testing page | ✅ Complete | Multi-resident batch runs with progress |
+| Claude vs Regex page | ✅ Complete (DEMO) | Side-by-side comparison - demo only, to be removed |
+| Quality Metrics page | ✅ Complete | AI Observability integration with TruLens |
 | Adaptive token sizing | ✅ Complete | Context threshold-based mode selection |
 | Production config storage | ✅ Complete | Model/prompt stored per-client in CONFIG_JSON |
 
@@ -914,7 +930,7 @@ This document has been updated based on feedback from Telstra Health's data engi
 
 ---
 
-*Document Version: 1.4*  
+*Document Version: 1.5*  
 *Created: 2025-01-27*  
-*Updated: 2026-01-30 (Implementation sync)*  
+*Updated: 2026-02-03 (AI Observability integration)*  
 *Status: Approved*

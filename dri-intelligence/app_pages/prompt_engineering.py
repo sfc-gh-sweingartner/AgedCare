@@ -16,6 +16,21 @@ This page lets you **test and refine** the LLM prompt used to detect DRI (Deteri
 4. **Review the resident context** preview to see what data will be sent to the LLM
 5. Click **Run LLM analysis** to execute and see results
 
+### Two Analysis Options
+
+| Button | Purpose | When to Use |
+|--------|---------|-------------|
+| **Run LLM analysis** | Quick test of prompt/model | Iterating on prompt changes, checking specific residents |
+| **Run evaluation** | Full quality assessment with metrics | Before deploying to production, tracking quality over time |
+
+#### Run Evaluation Details
+The "Run evaluation" button runs the analysis AND computes quality metrics using TruLens:
+- **Groundedness**: Measures how well the AI's response is supported by the actual resident data (target: >90%)
+- **Context relevance**: Checks if the retrieved context is relevant to the clinical query (target: >85%)
+- **Answer relevance**: Validates the response properly addresses the indicators being checked (target: >85%)
+
+Results are saved to the `DRI_EVALUATION_METRICS` table and appear in the **Quality metrics** page.
+
 ### Understanding Results
 - **Indicators detected**: Health conditions the AI identified in the resident's records
 - **Confidence**: How certain the AI is (high/medium/low)
@@ -26,6 +41,7 @@ This page lets you **test and refine** the LLM prompt used to detect DRI (Deteri
 - Test the same resident with different models to compare accuracy
 - Save promising prompt changes as new versions before modifying further
 - Check the **Claude vs Regex** page to compare AI results against the old keyword approach
+- Use **Run evaluation** to track quality improvements after prompt changes
 - Once satisfied, save your prompt for production in the **Configuration** page
     """)
 

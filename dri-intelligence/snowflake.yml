@@ -14,7 +14,7 @@ entities:
     main_file: streamlit_app.py
     artifacts:
       - streamlit_app.py
-      - pyproject.toml
+      - environment.yml
       - src/__init__.py
       - src/connection_helper.py
       - src/dri_analysis.py
@@ -26,3 +26,4 @@ entities:
       - app_pages/configuration.py
       - app_pages/comparison.py
       - app_pages/batch_testing.py
+      - app_pages/quality_metrics.py

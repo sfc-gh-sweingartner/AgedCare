@@ -55,6 +55,60 @@ All evaluation data is stored in Snowflake and can be accessed via:
 - Snowsight AI Observability interface for deep trace analysis
     """)
 
+with st.expander("Accessing AI Observability in Snowsight", expanded=False, icon=":material/monitoring:"):
+    st.markdown("""
+### Snowflake AI Observability Dashboard
+
+In addition to this Streamlit interface, Snowflake provides a native **AI Observability** dashboard in Snowsight. This is particularly useful for:
+
+- **Deep trace analysis** - See every step of the LLM call
+- **Cost tracking** - Monitor token usage and costs across models
+- **Latency breakdown** - Identify bottlenecks in processing
+- **Compliance audits** - Full logging of all AI interactions
+
+### How to Access in Snowsight
+
+1. **Log into Snowsight** at your Snowflake account URL
+2. Navigate to **Monitoring** → **AI Observability** (in the left sidebar under AI & ML)
+3. Select the **AGEDCARE** database from the filter dropdown
+4. Browse traces, metrics, and evaluations
+
+### What You'll Find
+
+| View | Description |
+|------|-------------|
+| **Traces** | Individual LLM call traces with inputs, outputs, and timings |
+| **Metrics** | Aggregated quality scores (groundedness, relevance) |
+| **Evaluations** | Side-by-side comparison of model/prompt combinations |
+| **Feedback** | Human feedback linked to specific traces |
+
+### Filtering Tips
+
+- Use the date range picker to focus on specific evaluation periods
+- Filter by `run_name` to find evaluations run from this app
+- Search for specific `resident_id` values to trace individual analyses
+
+### For Technical Users
+
+The underlying data is stored in Snowflake event tables. You can query these directly:
+
+```sql
+-- View recent traces
+SELECT * FROM SNOWFLAKE.TELEMETRY.TRACES 
+WHERE DATABASE_NAME = 'AGEDCARE'
+ORDER BY TIMESTAMP DESC LIMIT 100;
+
+-- View evaluation feedback
+SELECT * FROM SNOWFLAKE.TELEMETRY.FEEDBACK
+WHERE DATABASE_NAME = 'AGEDCARE';
+```
+
+### More Information
+
+For detailed documentation on AI Observability features, see:
+[Snowflake AI Observability Documentation](https://docs.snowflake.com/en/user-guide/snowflake-cortex/ai-observability)
+    """)
+
 session = get_snowflake_session()
 
 if session:
