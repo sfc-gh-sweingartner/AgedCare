@@ -1,7 +1,5 @@
 import streamlit as st
 import json
-import sys
-sys.path.insert(0, '/Users/sweingartner/CoCo/AgedCare/dri-intelligence')
 
 from src.connection_helper import get_snowflake_session, execute_query_df, execute_query
 from src.dri_analysis import get_rag_indicators
@@ -18,6 +16,21 @@ This page lets you **test and refine** the LLM prompt used to detect DRI (Deteri
 4. **Review the resident context** preview to see what data will be sent to the LLM
 5. Click **Run LLM analysis** to execute and see results
 
+### Two Analysis Options
+
+| Button | Purpose | When to Use |
+|--------|---------|-------------|
+| **Run LLM analysis** | Quick test of prompt/model | Iterating on prompt changes, checking specific residents |
+| **Run evaluation** | Full quality assessment with metrics | Before deploying to production, tracking quality over time |
+
+#### Run Evaluation Details
+The "Run evaluation" button runs the analysis AND computes quality metrics using TruLens:
+- **Groundedness**: Measures how well the AI's response is supported by the actual resident data (target: >90%)
+- **Context relevance**: Checks if the retrieved context is relevant to the clinical query (target: >85%)
+- **Answer relevance**: Validates the response properly addresses the indicators being checked (target: >85%)
+
+Results are saved to the `DRI_EVALUATION_METRICS` table and appear in the **Quality metrics** page.
+
 ### Understanding Results
 - **Indicators detected**: Health conditions the AI identified in the resident's records
 - **Confidence**: How certain the AI is (high/medium/low)
@@ -28,6 +41,7 @@ This page lets you **test and refine** the LLM prompt used to detect DRI (Deteri
 - Test the same resident with different models to compare accuracy
 - Save promising prompt changes as new versions before modifying further
 - Check the **Claude vs Regex** page to compare AI results against the old keyword approach
+- Use **Run evaluation** to track quality improvements after prompt changes
 - Once satisfied, save your prompt for production in the **Configuration** page
     """)
 
@@ -185,7 +199,48 @@ if session:
     
     st.subheader("Run analysis")
     
-    run_button = st.button("Run LLM analysis", type="primary", icon=":material/play_arrow:")
+    col_run1, col_run2 = st.columns([3, 1])
+    
+    with col_run1:
+        run_button = st.button("Run LLM analysis", type="primary", icon=":material/play_arrow:")
+    
+    with col_run2:
+        run_eval_button = st.button("Run evaluation", icon=":material/monitoring:", help="Run full evaluation and record quality metrics")
+    
+    if run_eval_button:
+        with st.spinner("Running evaluation with quality metrics..."):
+            try:
+                from src.ai_observability import DRIObservabilityManager
+                
+                obs_manager = DRIObservabilityManager(session, selected_client)
+                
+                results = obs_manager.run_evaluation(
+                    prompt_version=selected_version,
+                    model=selected_model,
+                    run_name=f"PromptTest_{selected_version}_{selected_resident}",
+                    resident_ids=[selected_resident]
+                )
+                
+                st.success(f"Evaluation complete!", icon=":material/check_circle:")
+                
+                with st.container(border=True):
+                    col_e1, col_e2, col_e3 = st.columns(3)
+                    with col_e1:
+                        groundedness = results['metrics'].get('avg_groundedness', 0) * 100
+                        st.metric("Groundedness", f"{groundedness:.1f}%")
+                    with col_e2:
+                        context_rel = results['metrics'].get('avg_context_relevance', 0) * 100
+                        st.metric("Context relevance", f"{context_rel:.1f}%")
+                    with col_e3:
+                        latency = results['metrics'].get('avg_latency_ms', 0)
+                        st.metric("Latency", f"{latency}ms")
+                
+                st.info("Full metrics available in the **Quality metrics** page.", icon=":material/info:")
+                
+            except ImportError:
+                st.error("AI Observability module not available. Run setup_ai_observability.sql first.", icon=":material/error:")
+            except Exception as e:
+                st.error(f"Evaluation failed: {e}", icon=":material/error:")
     
     if run_button:
         with st.spinner(f"Analyzing resident {selected_resident} with {selected_model}..."):

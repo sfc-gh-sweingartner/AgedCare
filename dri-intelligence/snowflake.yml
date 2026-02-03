@@ -7,10 +7,24 @@ entities:
       database: AGEDCARE
       schema: AGEDCARE
     query_warehouse: COMPUTE_WH
+    compute_pool: STREAMLIT_COMPUTE_POOL
+    runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
+    external_access_integrations:
+      - PYPI_ACCESS_INTEGRATION
     main_file: streamlit_app.py
-    pages_dir: pages
     artifacts:
       - streamlit_app.py
+      - pyproject.toml
       - src/__init__.py
       - src/connection_helper.py
       - src/dri_analysis.py
+      - src/ai_observability.py
+      - app_pages/__init__.py
+      - app_pages/dashboard.py
+      - app_pages/prompt_engineering.py
+      - app_pages/review_queue.py
+      - app_pages/analysis_results.py
+      - app_pages/configuration.py
+      - app_pages/comparison.py
+      - app_pages/batch_testing.py
+      - app_pages/quality_metrics.py

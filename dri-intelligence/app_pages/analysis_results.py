@@ -1,7 +1,5 @@
 import streamlit as st
 import json
-import sys
-sys.path.insert(0, '/Users/sweingartner/CoCo/AgedCare/dri-intelligence')
 
 from src.connection_helper import get_snowflake_session, execute_query_df
 
@@ -35,6 +33,46 @@ This page provides an **audit trail** of all LLM analyses run on residents. Use 
 - Use this page to verify evidence before approving changes in Review Queue
 - Processing times over 60 seconds may indicate context size issues
 - If results seem incomplete, the response may have been truncated (check Configuration for token settings)
+
+### Related Features
+- **Quality metrics** page shows aggregated quality scores for evaluations
+- **Snowsight AI Observability** provides deeper trace analysis (see Quality Metrics page for access instructions)
+    """)
+
+with st.expander("AI Observability in Snowsight", expanded=False, icon=":material/monitoring:"):
+    st.markdown("""
+### For Deeper Analysis
+
+While this page shows the raw LLM outputs, Snowflake's **AI Observability** feature in Snowsight provides additional capabilities:
+
+**Trace Analysis**
+- View the complete call chain for each analysis
+- See token counts, latency breakdown, and cost estimates
+- Drill down into individual prompt/completion pairs
+
+**How to Access**
+1. Log into **Snowsight** (your Snowflake web interface)
+2. Go to **Monitoring** → **AI Observability** in the left sidebar
+3. Filter by `AGEDCARE` database
+4. Search for specific analysis IDs or resident IDs
+
+**Direct SQL Access**
+```sql
+-- Query analysis history with quality scores
+SELECT 
+    a.ANALYSIS_ID,
+    a.RESIDENT_ID,
+    a.MODEL_USED,
+    a.PROCESSING_TIME_MS,
+    e.GROUNDEDNESS_SCORE,
+    e.IS_CORRECT
+FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS a
+LEFT JOIN AGEDCARE.AGEDCARE.DRI_EVALUATION_DETAIL e 
+    ON a.ANALYSIS_ID = e.ANALYSIS_ID
+ORDER BY a.ANALYSIS_TIMESTAMP DESC;
+```
+
+For full AI Observability documentation, see: [Snowflake AI Observability](https://docs.snowflake.com/en/user-guide/snowflake-cortex/ai-observability)
     """)
 
 session = get_snowflake_session()
