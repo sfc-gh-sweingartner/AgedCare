@@ -1,19 +1,3 @@
-"""
-=============================================================================
-DEMO-ONLY PAGE - Claude vs Regex Comparison
-=============================================================================
-This page is intended for DEMONSTRATION PURPOSES ONLY to show stakeholders
-that Claude LLM analysis achieves significantly lower false positive rates
-compared to the traditional regex/keyword matching approach.
-
-TARGET STATE: This page will be REMOVED once the demo is complete and
-stakeholders are convinced of the AI approach's superiority.
-
-For ongoing quality metrics and model evaluation, use the "Quality Metrics"
-page which integrates with Snowflake AI Observability.
-=============================================================================
-"""
-
 import streamlit as st
 import json
 import re
@@ -23,8 +7,6 @@ from src.connection_helper import get_snowflake_session, execute_query_df, execu
 session = get_snowflake_session()
 
 TOTAL_DEFICITS = 33
-
-st.warning("**Demo page** - This comparison tool is for demonstration purposes only. For ongoing quality metrics, use the Quality Metrics page.", icon=":material/science:")
 
 if session:
     with st.expander("How to use this page", expanded=False, icon=":material/help:"):
