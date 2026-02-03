@@ -21,19 +21,10 @@ import uuid
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple, Any
 
-try:
-    TRULENS_AVAILABLE = True
-    from trulens.core import TruSession
-    from trulens.apps.custom import TruCustomApp, instrument
-    from trulens.connectors.snowflake import SnowflakeConnector
-    from trulens.providers.cortex import Cortex
-except ImportError:
-    TRULENS_AVAILABLE = False
-    TruSession = None
-    TruCustomApp = None
-    instrument = lambda f: f
-    SnowflakeConnector = None
-    Cortex = None
+from trulens.core import TruSession
+from trulens.apps.custom import TruCustomApp, instrument
+from trulens.connectors.snowflake import SnowflakeConnector
+from trulens.providers.cortex import Cortex
 
 
 class DRIObservabilityManager:
@@ -43,6 +34,8 @@ class DRIObservabilityManager:
     - Running evaluations with quality metrics
     - Storing evaluation results
     - Querying historical metrics
+    
+    Requires TruLens packages to be installed.
     """
     
     def __init__(self, session, client_system_key: str = "DEMO_CLIENT_871"):
@@ -50,31 +43,24 @@ class DRIObservabilityManager:
         self.client_system_key = client_system_key
         self.tru_session = None
         self.feedback_functions = None
-        
-        if TRULENS_AVAILABLE and os.getenv("TRULENS_OTEL_TRACING") == "1":
-            self._init_trulens()
+        self._init_trulens()
     
     def _init_trulens(self):
         """Initialize TruLens session and feedback functions."""
-        try:
-            connector = SnowflakeConnector(snowpark_session=self.session)
-            self.tru_session = TruSession(connector=connector)
-            
-            provider = Cortex(self.session, model_engine="claude-3-5-sonnet")
-            
-            self.feedback_functions = {
-                'groundedness': provider.groundedness_measure_with_cot_reasons,
-                'context_relevance': provider.context_relevance,
-                'answer_relevance': provider.relevance,
-            }
-        except Exception as e:
-            print(f"Warning: Could not initialize TruLens: {e}")
-            self.tru_session = None
-            self.feedback_functions = None
+        connector = SnowflakeConnector(snowpark_session=self.session)
+        self.tru_session = TruSession(connector=connector)
+        
+        provider = Cortex(self.session, model_engine="claude-3-5-sonnet")
+        
+        self.feedback_functions = {
+            'groundedness': provider.groundedness_measure_with_cot_reasons,
+            'context_relevance': provider.context_relevance,
+            'answer_relevance': provider.relevance,
+        }
     
     def is_observability_enabled(self) -> bool:
         """Check if AI Observability is available and enabled."""
-        return TRULENS_AVAILABLE and self.tru_session is not None
+        return self.tru_session is not None
     
     def run_evaluation(
         self,
@@ -241,67 +227,21 @@ class DRIObservabilityManager:
     
     def _compute_groundedness(self, response: str, context: str) -> float:
         """
-        Compute groundedness score using LLM-as-judge.
+        Compute groundedness score using TruLens LLM-as-judge.
         Measures if the response is grounded in the provided context.
         """
-        if self.feedback_functions and 'groundedness' in self.feedback_functions:
-            try:
-                score = self.feedback_functions['groundedness'](context, response)
-                return float(score) if score is not None else 0.8
-            except:
-                pass
-        
-        return self._estimate_groundedness(response, context)
-    
-    def _estimate_groundedness(self, response: str, context: str) -> float:
-        """Fallback groundedness estimation without TruLens."""
-        try:
-            query = f"""
-            SELECT SNOWFLAKE.CORTEX.COMPLETE(
-                'claude-3-5-sonnet',
-                'You are evaluating whether an AI response is grounded in the provided context.
-                
-                CONTEXT:
-                {context[:5000]}
-                
-                RESPONSE:
-                {response[:3000]}
-                
-                Rate the groundedness from 0.0 to 1.0, where:
-                - 1.0 = Every claim in the response is directly supported by the context
-                - 0.5 = Some claims are supported, some are not
-                - 0.0 = Response makes claims not supported by context
-                
-                Return ONLY a number between 0.0 and 1.0, nothing else.'
-            ) as SCORE
-            """
-            result = self.session.sql(query.replace("'", "''")).collect()
-            if result:
-                score_text = result[0]['SCORE'].strip()
-                return float(score_text)
-        except:
-            pass
-        return 0.75
+        score = self.feedback_functions['groundedness'](context, response)
+        return float(score) if score is not None else 0.0
     
     def _compute_context_relevance(self, context: str, prompt: str) -> float:
-        """Compute context relevance score."""
-        if self.feedback_functions and 'context_relevance' in self.feedback_functions:
-            try:
-                score = self.feedback_functions['context_relevance'](prompt, context)
-                return float(score) if score is not None else 0.8
-            except:
-                pass
-        return 0.85
+        """Compute context relevance score using TruLens."""
+        score = self.feedback_functions['context_relevance'](prompt, context)
+        return float(score) if score is not None else 0.0
     
     def _compute_answer_relevance(self, response: str, prompt: str) -> float:
-        """Compute answer relevance score."""
-        if self.feedback_functions and 'answer_relevance' in self.feedback_functions:
-            try:
-                score = self.feedback_functions['answer_relevance'](prompt, response)
-                return float(score) if score is not None else 0.8
-            except:
-                pass
-        return 0.85
+        """Compute answer relevance score using TruLens."""
+        score = self.feedback_functions['answer_relevance'](prompt, response)
+        return float(score) if score is not None else 0.0
     
     def _get_resident_context(self, resident_id: int) -> str:
         """Get aggregated context for a resident."""
