@@ -15,6 +15,7 @@ entities:
     artifacts:
       - streamlit_app.py
       - pyproject.toml
+      - uv.lock
       - src/__init__.py
       - src/connection_helper.py
       - src/dri_analysis.py
