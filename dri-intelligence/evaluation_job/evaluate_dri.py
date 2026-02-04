@@ -19,7 +19,6 @@ from typing import Optional, Dict, List, Any
 
 from snowflake.snowpark import Session
 from trulens.core import TruSession
-from trulens.apps.custom import TruCustomApp
 from trulens.core.otel.instrument import instrument
 from trulens.otel.semconv.trace import SpanAttributes
 from trulens.connectors.snowflake import SnowflakeConnector
@@ -90,13 +89,7 @@ class DRIAnalyzer:
         result = self.session.sql(query).collect()
         return result[0]['CONTEXT'] if result else ""
     
-    @instrument(
-        span_type=SpanAttributes.SpanType.GENERATION,
-        attributes={
-            SpanAttributes.GENERATION.INPUT: "prompt",
-            SpanAttributes.GENERATION.OUTPUT: "return",
-        }
-    )
+    @instrument(span_type=SpanAttributes.SpanType.GENERATION)
     def generate_analysis(self, prompt: str) -> str:
         """
         Generate DRI analysis using Cortex LLM.
@@ -188,14 +181,6 @@ def run_evaluation(
     
     analyzer = DRIAnalyzer(session, prompt_version, model)
     
-    tru_app = TruCustomApp(
-        app=analyzer,
-        app_name="DRI_INTELLIGENCE",
-        app_version=f"{prompt_version}_{model}",
-        connector=connector,
-        main_method=analyzer.analyze_resident
-    )
-    
     residents = session.sql(f"""
         SELECT DISTINCT RESIDENT_ID 
         FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES
@@ -214,7 +199,6 @@ def run_evaluation(
     """).collect()
     
     results = []
-    total_groundedness = 0.0
     total_latency = 0
     
     for idx, resident_id in enumerate(resident_ids):
@@ -223,8 +207,7 @@ def run_evaluation(
         start_time = time.time()
         
         try:
-            with tru_app as recording:
-                result = analyzer.analyze_resident(resident_id)
+            result = analyzer.analyze_resident(resident_id)
             
             latency_ms = int((time.time() - start_time) * 1000)
             total_latency += latency_ms
@@ -270,21 +253,6 @@ def run_evaluation(
     print(f"  Records evaluated: {n}")
     print(f"  Average latency: {avg_latency}ms")
     print(f"\nView results in Snowsight: AI & ML → Evaluations")
-    print(f"Application: DRI_INTELLIGENCE, Version: {prompt_version}_{model}")
-    
-    run_config = {
-        'run_name': f"{run_name}_metrics",
-        'description': f"DRI evaluation metrics for {run_name}",
-        'source_type': 'TABLE',
-        'dataset_name': 'AGEDCARE.AGEDCARE.DRI_EVALUATION_DETAIL',
-        'dataset_spec': {
-            'RECORD_ROOT.INPUT': 'RESIDENT_ID',
-        },
-        'llm_judge_name': 'mistral-large2'
-    }
-    
-    print(f"\nTo compute LLM-based metrics (groundedness, relevance), run:")
-    print(f"  tru_app.add_run(run_config).compute_metrics(['groundedness', 'context_relevance', 'answer_relevance'])")
     
     return {
         'evaluation_id': evaluation_id,
@@ -304,15 +272,30 @@ def main():
     args = parser.parse_args()
     
     print("Connecting to Snowflake...")
-    session = Session.builder.configs({
-        "account": os.environ.get("SNOWFLAKE_ACCOUNT"),
-        "user": os.environ.get("SNOWFLAKE_USER"),
-        "password": os.environ.get("SNOWFLAKE_PASSWORD"),
-        "role": os.environ.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
-        "warehouse": os.environ.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
-        "database": os.environ.get("SNOWFLAKE_DATABASE", "AGEDCARE"),
-        "schema": os.environ.get("SNOWFLAKE_SCHEMA", "AGEDCARE"),
-    }).create()
+    
+    token_path = "/snowflake/session/token"
+    if os.path.exists(token_path):
+        with open(token_path, 'r') as f:
+            token = f.read().strip()
+        session = Session.builder.configs({
+            "account": os.environ.get("SNOWFLAKE_ACCOUNT"),
+            "host": os.environ.get("SNOWFLAKE_HOST"),
+            "authenticator": "oauth",
+            "token": token,
+            "warehouse": os.environ.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
+            "database": os.environ.get("SNOWFLAKE_DATABASE", "AGEDCARE"),
+            "schema": os.environ.get("SNOWFLAKE_SCHEMA", "AGEDCARE"),
+        }).create()
+    else:
+        session = Session.builder.configs({
+            "account": os.environ.get("SNOWFLAKE_ACCOUNT"),
+            "user": os.environ.get("SNOWFLAKE_USER"),
+            "password": os.environ.get("SNOWFLAKE_PASSWORD"),
+            "role": os.environ.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
+            "warehouse": os.environ.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
+            "database": os.environ.get("SNOWFLAKE_DATABASE", "AGEDCARE"),
+            "schema": os.environ.get("SNOWFLAKE_SCHEMA", "AGEDCARE"),
+        }).create()
     
     try:
         results = run_evaluation(
