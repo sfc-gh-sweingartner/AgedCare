@@ -19,7 +19,6 @@ entities:
       - src/__init__.py
       - src/connection_helper.py
       - src/dri_analysis.py
-      - src/ai_observability.py
       - app_pages/__init__.py
       - app_pages/dashboard.py
       - app_pages/prompt_engineering.py
