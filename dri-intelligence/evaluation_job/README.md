@@ -1,46 +1,73 @@
-# DRI Evaluation Job
+# DRI Evaluation Job - Snowflake AI Observability Integration
 
 SPCS Job container for running TruLens-based AI Observability evaluations of the DRI Intelligence system.
 
-## Why a Separate Container?
+## Key Integration Points
 
-The TruLens packages (`trulens-core`, `trulens-connectors-snowflake`, `trulens-providers-cortex`) have heavy dependencies including `snowflake-ml-python`, `xgboost`, and `scipy` (~200MB total). These exceed the package resolution timeout in the standard Streamlit container runtime.
-
-By running evaluations in a dedicated SPCS Job container:
-- ✅ Full PyPI access (any package)
-- ✅ Longer timeouts for ML workloads
-- ✅ Results integrate with Snowsight AI Observability UI
-- ✅ Can be scheduled via Snowflake Tasks
-- ✅ Callable from the Streamlit app via `EXECUTE JOB SERVICE`
+This job properly integrates with **Snowflake AI Observability** so results appear in:
+- **Snowsight > AI & ML > Evaluations**
+- Application: `DRI_INTELLIGENCE_AGENT`
+- Runs appear with metrics: groundedness, context_relevance, answer_relevance, coherence
 
 ## Architecture
 
 ```
-┌─────────────────────┐     EXECUTE JOB SERVICE      ┌──────────────────────┐
-│  Streamlit App      │ ─────────────────────────▶   │  This SPCS Job       │
-│  (Quality Metrics)  │                              │  (TruLens + Python)  │
-└─────────────────────┘                              └──────────────────────┘
+┌─────────────────────┐     EXECUTE JOB SERVICE      ┌──────────────────────────────┐
+│  Streamlit App      │ ─────────────────────────▶   │  This SPCS Job               │
+│  (Quality Metrics)  │                              │  (TruLens + TruApp Pattern)  │
+└─────────────────────┘                              └──────────────────────────────┘
          │                                                      │
-         │  SELECT FROM                                         │ Writes to
+         │  SELECT FROM                                         │ TruApp registers to
          ▼                                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    Snowflake AI Observability Tables                        │
-│                    + DRI_EVALUATION_METRICS/DETAIL                          │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                    Snowflake AI Observability                                       │
+│                    (SNOWFLAKE.LOCAL.AI_OBSERVABILITY_EVENTS)                        │
+│                    + Custom Tables (DRI_EVALUATION_METRICS/DETAIL)                  │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+                                        │
+                                        ▼
+                              ┌─────────────────────┐
+                              │   Snowsight UI      │
+                              │   AI & ML >         │
+                              │   Evaluations       │
+                              └─────────────────────┘
 ```
+
+## How It Works
+
+The evaluation follows the official Snowflake AI Observability pattern:
+
+1. **TruSession**: Creates connection to Snowflake AI Observability via SnowflakeConnector
+2. **TruApp**: Registers the DRIAnalyzer application with proper instrumentation
+3. **RunConfig**: Specifies dataset mapping (RECORD_ROOT.INPUT, INPUT_ID)
+4. **run.start()**: Executes analysis for each resident, capturing traces
+5. **run.compute_metrics()**: Triggers LLM-as-judge evaluation for:
+   - Groundedness (is the response supported by context?)
+   - Context Relevance (is the retrieved data relevant?)
+   - Answer Relevance (does the response address the query?)
+   - Coherence (is the response logically consistent?)
 
 ## Deployment
 
-### 1. Login to Snowflake Registry
+### 1. Run Setup Script
 
 ```bash
-snow spcs image-registry login --connection DEMO_SWEINGARTNER
+snow sql -f setup_evaluation_job.sql -c DEMO_SWEINGARTNER
 ```
+
+This grants the required AI Observability privileges:
+- `SNOWFLAKE.CORTEX_USER` database role
+- `SNOWFLAKE.AI_OBSERVABILITY_EVENTS_LOOKUP` application role
+- `CREATE EXTERNAL AGENT` on schema
+- `CREATE TASK` and `EXECUTE TASK` privileges
 
 ### 2. Build and Push Docker Image
 
 ```bash
 cd dri-intelligence/evaluation_job
+
+# Login to Snowflake registry
+snow spcs image-registry login --connection DEMO_SWEINGARTNER
 
 # Build for linux/amd64 (required for SPCS)
 docker build --platform linux/amd64 -t dri-evaluation:latest .
@@ -53,38 +80,41 @@ docker tag dri-evaluation:latest <registry>/AGEDCARE/AGEDCARE/DRI_IMAGES/dri-eva
 docker push <registry>/AGEDCARE/AGEDCARE/DRI_IMAGES/dri-evaluation:latest
 ```
 
-### 3. Run Setup Script
+### 3. Upload Job Spec to Stage
 
 ```bash
-snow sql -f setup_evaluation_job.sql -c DEMO_SWEINGARTNER
-```
-
-Or in Snowsight, open a worksheet and run `setup_evaluation_job.sql`.
-
-### 4. Verify Deployment
-
-```sql
-SHOW SERVICES LIKE 'DRI_EVALUATION%';
-SELECT SYSTEM$GET_SERVICE_STATUS('DRI_EVALUATION_JOB');
+snow stage copy job-run-spec.yaml @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE -c DEMO_SWEINGARTNER
 ```
 
 ## Usage
 
 ### From Streamlit App
 
-The Quality Metrics page in the Streamlit app has a "Run Evaluation" button that triggers this job.
+The Quality Metrics page has a "Run Quality Evaluation" button that triggers this job.
 
 ### From SQL
 
 ```sql
-EXECUTE JOB SERVICE AGEDCARE.AGEDCARE.DRI_EVALUATION_JOB
-    WITH PARAMETERS (
-        RUN_NAME => 'WeeklyEval_2026-02-04',
-        PROMPT_VERSION => 'v1.4',
-        MODEL => 'claude-3-5-sonnet',
-        SAMPLE_SIZE => 25
-    );
+-- Drop any existing job run first
+DROP SERVICE IF EXISTS AGEDCARE.AGEDCARE.DRI_EVAL_RUN;
+
+-- Execute the evaluation job
+EXECUTE JOB SERVICE
+IN COMPUTE POOL FULLSTACK_COMPUTE_POOL
+FROM @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE
+SPEC = 'job-run-spec.yaml'
+NAME = AGEDCARE.AGEDCARE.DRI_EVAL_RUN
+QUERY_WAREHOUSE = COMPUTE_WH;
 ```
+
+### With Custom Parameters
+
+The job accepts these arguments:
+- `--run-name`: Name for this evaluation run (auto-generated if not provided)
+- `--prompt-version`: Prompt version to evaluate (default: v1.0)
+- `--model`: LLM model to use (default: claude-sonnet-4-5)
+- `--sample-size`: Number of residents to evaluate (default: 10)
+- `--app-name`: Application name in AI Observability (default: DRI_INTELLIGENCE_AGENT)
 
 ### Scheduled Evaluation (via Task)
 
@@ -93,45 +123,49 @@ CREATE OR REPLACE TASK DRI_WEEKLY_EVALUATION
     WAREHOUSE = COMPUTE_WH
     SCHEDULE = 'USING CRON 0 6 * * MON UTC'  -- Every Monday at 6am UTC
 AS
-    EXECUTE JOB SERVICE AGEDCARE.AGEDCARE.DRI_EVALUATION_JOB
-    WITH PARAMETERS (
-        RUN_NAME => 'Weekly_' || CURRENT_DATE()::VARCHAR,
-        PROMPT_VERSION => 'v1.4',
-        MODEL => 'claude-3-5-sonnet',
-        SAMPLE_SIZE => 50
-    );
+CALL SYSTEM$EXECUTE_JOB_SERVICE(
+    'FULLSTACK_COMPUTE_POOL',
+    '@AGEDCARE.AGEDCARE.DRI_EVAL_STAGE',
+    'job-run-spec.yaml',
+    'AGEDCARE.AGEDCARE.DRI_WEEKLY_EVAL',
+    'COMPUTE_WH'
+);
 
 ALTER TASK DRI_WEEKLY_EVALUATION RESUME;
 ```
 
 ## Viewing Results
 
-### In Streamlit App
+### In Snowsight (Primary)
+
+Navigate to **AI & ML > Evaluations** to see:
+- Application: `DRI_INTELLIGENCE_AGENT`
+- All evaluation runs with aggregated metrics
+- Detailed traces with inputs/outputs for each resident
+- LLM judge explanations for scores
+- Side-by-side comparison of runs
+- Cost and latency breakdowns
+
+### In Streamlit App (Secondary)
 
 Navigate to **Quality Metrics** page to see:
 - Latest evaluation status
 - False positive rate trend
 - Evaluation history with per-resident details
 
-### In Snowsight
-
-Navigate to **AI & ML → Evaluations** to see:
-- Detailed traces with inputs/outputs
-- LLM judge explanations for scores
-- Side-by-side comparison of runs
-- Cost and latency breakdowns
-
 ### Via SQL
 
 ```sql
--- Latest evaluation summary
+-- View AI Observability data (requires AI_OBSERVABILITY_EVENTS_LOOKUP role)
+-- This is the native AI Observability event table
+SELECT * FROM SNOWFLAKE.LOCAL.AI_OBSERVABILITY_EVENTS
+WHERE app_name = 'DRI_INTELLIGENCE_AGENT'
+ORDER BY timestamp DESC
+LIMIT 100;
+
+-- View custom evaluation summary (always accessible)
 SELECT * FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
 ORDER BY CREATED_TIMESTAMP DESC LIMIT 10;
-
--- Per-resident details for an evaluation
-SELECT * FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_DETAIL
-WHERE EVALUATION_ID = '<evaluation_id>'
-ORDER BY RECORD_INDEX;
 ```
 
 ## Troubleshooting
@@ -139,23 +173,38 @@ ORDER BY RECORD_INDEX;
 ### Check Job Logs
 
 ```sql
-SELECT SYSTEM$GET_SERVICE_LOGS('DRI_EVALUATION_JOB', 0, 'dri-evaluation');
+SELECT SYSTEM$GET_SERVICE_LOGS('AGEDCARE.AGEDCARE.DRI_EVAL_RUN', 0, 'dri-evaluation');
 ```
 
 ### Check Job Status
 
 ```sql
-SELECT SYSTEM$GET_SERVICE_STATUS('DRI_EVALUATION_JOB');
+SELECT SYSTEM$GET_SERVICE_STATUS('AGEDCARE.AGEDCARE.DRI_EVAL_RUN');
 ```
 
 ### Common Issues
 
 | Issue | Solution |
 |-------|----------|
+| "EXTERNAL AGENT privilege required" | Run `setup_evaluation_job.sql` to grant privileges |
+| "Application role not granted" | Grant `AI_OBSERVABILITY_EVENTS_LOOKUP` to your role |
+| Evaluations don't appear in Snowsight | Check that TruApp registration succeeded in logs |
 | Image not found | Verify docker push completed, check image path in spec |
 | Auth errors | Re-run `snow spcs image-registry login` |
 | Out of memory | Increase `resources.limits.memory` in job spec |
-| Timeout | Reduce `SAMPLE_SIZE` or increase job timeout |
+| Timeout | Reduce `--sample-size` or increase job timeout |
+
+### Verify Privileges
+
+```sql
+-- Check you have the required roles
+SHOW GRANTS TO USER CURRENT_USER();
+
+-- Should see:
+-- - SNOWFLAKE.CORTEX_USER database role
+-- - SNOWFLAKE.AI_OBSERVABILITY_EVENTS_LOOKUP application role
+-- - CREATE EXTERNAL AGENT on AGEDCARE.AGEDCARE schema
+```
 
 ## Files
 
@@ -163,7 +212,20 @@ SELECT SYSTEM$GET_SERVICE_STATUS('DRI_EVALUATION_JOB');
 |------|---------|
 | `Dockerfile` | Container image definition |
 | `requirements.txt` | Python dependencies (includes TruLens) |
-| `evaluate_dri.py` | Main evaluation script with TruLens instrumentation |
+| `evaluate_dri.py` | Main evaluation script with TruApp pattern |
 | `entrypoint.sh` | Container entry point |
-| `job-spec.yaml` | SPCS job specification |
-| `setup_evaluation_job.sql` | SQL setup script |
+| `job-spec.yaml` | SPCS job specification (persistent service) |
+| `job-run-spec.yaml` | SPCS job specification (on-demand execution) |
+| `setup_evaluation_job.sql` | SQL setup script with AI Observability privileges |
+
+## Why a Separate Container?
+
+The TruLens packages (`trulens-core`, `trulens-connectors-snowflake`, `trulens-apps-custom`) have heavy dependencies (~500MB total). These exceed the package resolution timeout in the standard Streamlit container runtime.
+
+Benefits of dedicated SPCS Job container:
+- ✅ Full PyPI access (any package)
+- ✅ Longer timeouts for ML workloads
+- ✅ Results integrate with Snowsight AI Observability UI
+- ✅ Can be scheduled via Snowflake Tasks
+- ✅ Reusable by other Streamlit apps in your account
+- ✅ Callable from any app via `EXECUTE JOB SERVICE`

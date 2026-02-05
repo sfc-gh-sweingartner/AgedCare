@@ -3,7 +3,7 @@
 ## Document Information
 | Field | Value |
 |-------|-------|
-| Version | 1.3 |
+| Version | 1.4 |
 | Created | 2026-01-28 |
 | Status | Approved |
 | Prerequisite | Functional Design v1.3 (Approved) |
@@ -345,6 +345,12 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_AUDIT_LOG (
 ```
 
 ### 2.4 AI Observability Tables
+
+**Architecture Note (v1.4):** The AI Observability system has been restructured:
+- **TruLens** runs in a **separate SPCS Job container** (DRI_EVALUATION_JOB), not in the Streamlit app
+- The Streamlit app's "Run Evaluation" button runs **synchronous LLM analysis** and stores execution metrics
+- Full TruLens-based quality metrics (groundedness scores, context relevance) require deploying the SPCS evaluation job
+- Results viewable in **Snowsight AI & ML → Evaluations** only when TruLens integration is active
 
 ```sql
 -- ============================================================================
@@ -741,7 +747,8 @@ dri-intelligence/
 ### 5.2 Page 2: Prompt Engineering / Model Testing (Key Page)
 
 **Implemented Features:**
-- Resident selector dropdown populated from ACTIVE_RESIDENT_NOTES
+- Resident selector dropdown showing facility name (e.g., "871 - DEMO_CLIENT_871")
+- Auto-select client configuration based on resident's facility
 - Model selector with Claude 4.5 variants and other Snowflake Cortex models
 - Prompt version selector from DRI_PROMPT_VERSIONS table
 - Prompt text area editor with variable highlighting
@@ -848,6 +855,22 @@ The Processing Settings tab controls production batch processing configuration:
 
 This page surfaces AI Observability metrics in a clinician-friendly format:
 
+**Current Implementation (v1.4):**
+
+The page displays **two modes** based on available data:
+
+1. **Execution Metrics Mode** (default when TruLens not deployed):
+   - Records evaluated count
+   - Total records in evaluation
+   - Status (COMPLETED/RUNNING)
+   - Average latency per analysis
+
+2. **Full Quality Metrics Mode** (when TruLens SPCS job is active):
+   - Groundedness score (target >90%)
+   - Context relevance score (target >85%)
+   - Answer relevance score (target >85%)
+   - False positive rate (target <1%)
+
 **Implemented Features:**
 
 1. **Current Quality Status**
@@ -879,10 +902,14 @@ This page surfaces AI Observability metrics in a clinician-friendly format:
    - Export ground truth for external validation
 
 **Technical Integration:**
-- Uses `ai_observability.py` module with TruLens packages
-- Stores metrics in DRI_EVALUATION_METRICS and DRI_EVALUATION_DETAIL tables
-- TruLens computes groundedness using LLM-as-judge pattern
-- No fallback code - errors displayed if TruLens not installed
+
+*Architecture Change (v1.4):*
+- TruLens has been moved to a separate SPCS Job container (DRI_EVALUATION_JOB)
+- The Streamlit app does NOT include TruLens packages (too heavy for container runtime limits)
+- "Run Evaluation" from the Quality Metrics page runs synchronous batch analysis
+- Full TruLens metrics require deploying the SPCS evaluation job separately
+- Stores execution data in DRI_EVALUATION_METRICS and DRI_EVALUATION_DETAIL tables
+- Snowsight AI & ML → Evaluations shows data only when TruLens integration is active
 
 #### Configuration Page Mockup
 
@@ -1185,8 +1212,24 @@ EXPOSE 8501
 CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
 ```
 
-### 8.2 requirements.txt
+### 8.2 requirements.txt / pyproject.toml
 
+**Streamlit App (pyproject.toml - current v1.4):**
+```toml
+[project]
+name = "dri-intelligence"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "streamlit>=1.50.0",
+    "pandas>=2.0.0",
+    "snowflake-snowpark-python>=1.0.0",
+]
+```
+
+**Note:** TruLens packages are NOT included in the Streamlit app. They are installed in the separate SPCS evaluation job container.
+
+**SPCS Evaluation Job Container (requirements.txt):**
 ```
 streamlit>=1.28.0
 snowflake-connector-python[pandas]>=3.0.0
@@ -1197,8 +1240,6 @@ trulens-connectors-snowflake>=1.0.0
 trulens-providers-cortex>=1.0.0
 backports.tarfile>=1.0.0
 ```
-
-**Note**: TruLens packages are required for AI Observability functionality. The application will raise an ImportError if these are not installed - there is no fallback code by design.
 
 ### 8.3 SPCS Service Definition
 
@@ -1573,9 +1614,9 @@ The warehouse `MYWH` is used ONLY for:
 
 ---
 
-*Document Version: 1.3*  
+*Document Version: 1.5*  
 *Created: 2026-01-28*  
-*Updated: 2026-02-03*  
+*Updated: 2026-02-05*  
 *Status: Approved*
 
 ### Change Log
@@ -1585,3 +1626,5 @@ The warehouse `MYWH` is used ONLY for:
 | 1.1 | 2026-01-28 | Added: Comprehensive automated testing (Section 10), Client configuration UI details (Section 5.4), Sample client mappings (Section 6), Compute resource clarification (Section 12), Changed warehouse to MYWH |
 | 1.2 | 2026-01-30 | Implementation sync with functional design v1.4 |
 | 1.3 | 2026-02-03 | AI Observability integration: Added DRI_EVALUATION_METRICS, DRI_EVALUATION_DETAIL, DRI_GROUND_TRUTH tables (Section 2.4), added ai_observability.py module, replaced batch_testing.py with quality_metrics.py, added TruLens packages to requirements.txt, marked Claude vs Regex as demo-only |
+| 1.4 | 2026-02-05 | Architecture update: TruLens moved to separate SPCS job container (DRI_EVALUATION_JOB), Streamlit app no longer requires TruLens packages, evaluations from UI run synchronously without TruLens, updated pyproject.toml dependencies, clarified quality metrics page shows execution metrics (not TruLens scores) unless full TruLens integration deployed |
+| 1.5 | 2026-02-05 | UI improvements: Resident dropdown shows facility name, auto-select client config based on resident, Run Quality Evaluation button triggers SPCS job via EXECUTE JOB SERVICE, sample size selector added |

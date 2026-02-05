@@ -1,11 +1,11 @@
 """
 Quality Metrics Page - AI Observability Dashboard
-=================================================
+
 This page displays quality metrics from Snowflake AI Observability,
 including groundedness scores, false positive rates, and evaluation history.
 
 Evaluations are run via a separate SPCS Job container that has TruLens installed.
-Results are stored in Snowflake and viewable in Snowsight AI & ML → Evaluations.
+Results are stored in Snowflake and viewable in Snowsight AI & ML -> Evaluations.
 """
 
 import streamlit as st
@@ -83,52 +83,41 @@ exceed the Streamlit container runtime limits.
 | **DRI_EVALUATION_DETAIL** | Per-resident evaluation details |
 | **Snowsight AI Observability** | Native UI for trace analysis |
 
-### Setup
-If the evaluation job is not yet deployed, see the setup instructions below.
+### Running Evaluations
+Evaluations can be run on-demand via SQL command (no persistent service required).
     """)
 
 session = get_snowflake_session()
 
 if session:
-    job_exists = False
+    has_evaluation_data = False
     try:
-        job_check = execute_query("""
-            SELECT COUNT(*) as CNT FROM INFORMATION_SCHEMA.SERVICES 
-            WHERE SERVICE_NAME = 'DRI_EVALUATION_JOB'
+        eval_check = execute_query("""
+            SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
+            WHERE AVG_GROUNDEDNESS_SCORE IS NOT NULL
         """, session)
-        job_exists = job_check and job_check[0]['CNT'] > 0
+        has_evaluation_data = eval_check and eval_check[0]['CNT'] > 0
     except:
         pass
     
-    if not job_exists:
-        st.warning("Evaluation job not deployed. See setup instructions below.", icon=":material/warning:")
-        
-        with st.expander("SPCS Job setup instructions", expanded=True, icon=":material/build:"):
+    if not has_evaluation_data:
+        with st.expander("How to run evaluations", expanded=True, icon=":material/build:"):
             st.markdown("""
-### Deploy the Evaluation Job
+### Run an Evaluation
 
-The evaluation job requires a one-time setup. Run these commands:
+Evaluations are run as SPCS jobs. The container image is already deployed.
 
-**1. Build and push the container image:**
-```bash
-cd dri-intelligence/evaluation_job
-docker build --platform linux/amd64 -t dri-evaluation:latest .
-docker tag dri-evaluation:latest <registry>/AGEDCARE/AGEDCARE/DRI_IMAGES/dri-evaluation:latest
-docker push <registry>/AGEDCARE/AGEDCARE/DRI_IMAGES/dri-evaluation:latest
-```
-
-**2. Create the job service in Snowflake:**
+**Run evaluation via SQL:**
 ```sql
--- Run the setup script
-@dri-intelligence/evaluation_job/setup_evaluation_job.sql
+EXECUTE JOB SERVICE
+IN COMPUTE POOL FULLSTACK_COMPUTE_POOL
+FROM @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE
+SPEC = 'job-run-spec.yaml'
+NAME = AGEDCARE.AGEDCARE.DRI_EVAL_RUN
+QUERY_WAREHOUSE = COMPUTE_WH;
 ```
 
-**3. Verify deployment:**
-```sql
-SHOW SERVICES LIKE 'DRI_EVALUATION%';
-```
-
-For detailed instructions, see `dri-intelligence/evaluation_job/README.md`
+This will evaluate residents and compute quality metrics (groundedness, relevance scores).
             """)
     
     st.subheader("Current quality status")
@@ -159,12 +148,14 @@ For detailed instructions, see `dri-intelligence/evaluation_job/README.md`
                 MODEL_USED,
                 TOTAL_RECORDS,
                 RECORDS_EVALUATED,
+                AVG_LATENCY_MS,
                 ROUND(AVG_GROUNDEDNESS_SCORE * 100, 1) as GROUNDEDNESS_PCT,
                 ROUND(AVG_CONTEXT_RELEVANCE_SCORE * 100, 1) as CONTEXT_RELEVANCE_PCT,
                 ROUND(AVG_ANSWER_RELEVANCE_SCORE * 100, 1) as ANSWER_RELEVANCE_PCT,
                 ROUND(FALSE_POSITIVE_RATE * 100, 2) as FP_RATE_PCT,
                 STATUS
             FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
+            WHERE AVG_GROUNDEDNESS_SCORE IS NOT NULL
             ORDER BY CREATED_TIMESTAMP DESC
             LIMIT 1
         """, session)
@@ -172,208 +163,264 @@ For detailed instructions, see `dri-intelligence/evaluation_job/README.md`
         if latest_eval is not None and len(latest_eval) > 0:
             eval_row = latest_eval.iloc[0]
             
+            has_quality_metrics = eval_row['GROUNDEDNESS_PCT'] is not None
+            
             with st.container(border=True):
                 st.markdown(f"**Latest evaluation:** {eval_row['RUN_NAME']}")
                 st.caption(f"Run on {eval_row['CREATED_TIMESTAMP']} | Model: {eval_row['MODEL_USED']} | Prompt: {eval_row['PROMPT_VERSION']}")
+                
+                if not has_quality_metrics:
+                    st.info("Quality metrics (groundedness, FP rate) require TruLens integration via the SPCS evaluation job. Current data shows execution metrics only.", icon=":material/info:")
                 
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
                     fp_rate = eval_row['FP_RATE_PCT'] or 0
-                    st.metric("False positive rate", f"{fp_rate}%")
-                    if fp_rate <= 1.0:
-                        st.badge("Target met", icon=":material/check:", color="green")
+                    if has_quality_metrics:
+                        st.metric("False positive rate", f"{fp_rate}%")
+                        if fp_rate <= 1.0:
+                            st.badge("Target met", icon=":material/check:", color="green")
+                        else:
+                            st.badge("Above target", icon=":material/warning:", color="red")
                     else:
-                        st.badge("Above target", icon=":material/warning:", color="red")
+                        st.metric("Records evaluated", eval_row['RECORDS_EVALUATED'] or 0)
                 
                 with col2:
                     groundedness = eval_row['GROUNDEDNESS_PCT'] or 0
-                    st.metric("Groundedness", f"{groundedness}%")
-                    if groundedness >= 90:
-                        st.badge("Good", icon=":material/check:", color="green")
-                    elif groundedness >= 75:
-                        st.badge("Acceptable", icon=":material/info:", color="orange")
+                    if has_quality_metrics:
+                        st.metric("Groundedness", f"{groundedness}%")
+                        if groundedness >= 90:
+                            st.badge("Good", icon=":material/check:", color="green")
+                        elif groundedness >= 75:
+                            st.badge("Acceptable", icon=":material/info:", color="orange")
+                        else:
+                            st.badge("Needs improvement", icon=":material/warning:", color="red")
                     else:
-                        st.badge("Needs improvement", icon=":material/warning:", color="red")
+                        st.metric("Total records", eval_row['TOTAL_RECORDS'] or 0)
                 
                 with col3:
                     context_rel = eval_row['CONTEXT_RELEVANCE_PCT'] or 0
-                    st.metric("Context relevance", f"{context_rel}%")
-                    if context_rel >= 85:
-                        st.badge("Good", icon=":material/check:", color="green")
+                    if has_quality_metrics:
+                        st.metric("Context relevance", f"{context_rel}%")
+                        if context_rel >= 85:
+                            st.badge("Good", icon=":material/check:", color="green")
+                        else:
+                            st.badge("Review needed", icon=":material/info:", color="orange")
                     else:
-                        st.badge("Review needed", icon=":material/info:", color="orange")
+                        st.metric("Status", eval_row['STATUS'])
                 
                 with col4:
-                    answer_rel = eval_row['ANSWER_RELEVANCE_PCT'] or 0
-                    st.metric("Answer relevance", f"{answer_rel}%")
-                    if answer_rel >= 85:
-                        st.badge("Good", icon=":material/check:", color="green")
+                    if has_quality_metrics:
+                        answer_rel = eval_row['ANSWER_RELEVANCE_PCT'] or 0
+                        st.metric("Answer relevance", f"{answer_rel}%")
+                        if answer_rel >= 85:
+                            st.badge("Good", icon=":material/check:", color="green")
+                        else:
+                            st.badge("Review needed", icon=":material/info:", color="orange")
                     else:
-                        st.badge("Review needed", icon=":material/info:", color="orange")
+                        avg_latency = eval_row['AVG_LATENCY_MS'] or 0
+                        st.metric("Avg latency", f"{int(avg_latency)}ms")
         else:
             with st.container(border=True):
                 st.info("No evaluations have been run yet. Use the 'Run evaluation' section below to start.", icon=":material/info:")
         
-        st.subheader("False positive rate trend")
+        st.subheader("Quality metrics trend")
         
-        fp_trend = execute_query_df("""
+        metrics_trend = execute_query_df("""
             SELECT 
-                DATE_TRUNC('day', CREATED_TIMESTAMP)::DATE as EVAL_DATE,
-                ROUND(AVG(FALSE_POSITIVE_RATE) * 100, 2) as AVG_FP_RATE_PCT,
-                ROUND(AVG(AVG_GROUNDEDNESS_SCORE) * 100, 1) as AVG_GROUNDEDNESS_PCT,
-                COUNT(*) as EVAL_COUNT
+                CREATED_TIMESTAMP,
+                RUN_NAME,
+                ROUND(COALESCE(FALSE_POSITIVE_RATE, 0) * 100, 2) as FP_RATE_PCT,
+                ROUND(COALESCE(AVG_GROUNDEDNESS_SCORE, 0) * 100, 1) as GROUNDEDNESS_PCT,
+                ROUND(COALESCE(AVG_CONTEXT_RELEVANCE_SCORE, 0) * 100, 1) as CONTEXT_RELEVANCE_PCT,
+                ROUND(COALESCE(AVG_ANSWER_RELEVANCE_SCORE, 0) * 100, 1) as ANSWER_RELEVANCE_PCT,
+                RECORDS_EVALUATED,
+                AVG_LATENCY_MS
             FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
             WHERE STATUS = 'COMPLETED'
-            GROUP BY DATE_TRUNC('day', CREATED_TIMESTAMP)::DATE
-            ORDER BY EVAL_DATE
+            ORDER BY CREATED_TIMESTAMP
         """, session)
         
-        if fp_trend is not None and len(fp_trend) > 0:
-            col_chart, col_target = st.columns([3, 1])
+        if metrics_trend is not None and len(metrics_trend) > 0:
+            tab_all, tab_quality, tab_latency = st.tabs(["All metrics", "Quality scores", "Performance"])
             
-            with col_chart:
-                st.line_chart(fp_trend.set_index('EVAL_DATE')['AVG_FP_RATE_PCT'], use_container_width=True)
-            
-            with col_target:
+            with tab_all:
+                chart_data = metrics_trend[['CREATED_TIMESTAMP', 'GROUNDEDNESS_PCT', 'CONTEXT_RELEVANCE_PCT', 'ANSWER_RELEVANCE_PCT']].copy()
+                chart_data = chart_data.set_index('CREATED_TIMESTAMP')
+                chart_data.columns = ['Groundedness %', 'Context Relevance %', 'Answer Relevance %']
+                st.line_chart(chart_data, use_container_width=True)
+                
                 with st.container(border=True):
-                    st.markdown("**Target: <1%**")
-                    st.caption("Red line = 1% target threshold")
-                    
-                    current_fp = fp_trend['AVG_FP_RATE_PCT'].iloc[-1] if len(fp_trend) > 0 else 0
-                    if current_fp <= 1.0:
-                        st.success(f"Current: {current_fp}%", icon=":material/check_circle:")
-                    else:
-                        st.error(f"Current: {current_fp}%", icon=":material/error:")
+                    cols = st.columns(4)
+                    latest = metrics_trend.iloc[-1]
+                    with cols[0]:
+                        st.metric("Latest groundedness", f"{latest['GROUNDEDNESS_PCT']}%")
+                    with cols[1]:
+                        st.metric("Latest context relevance", f"{latest['CONTEXT_RELEVANCE_PCT']}%")
+                    with cols[2]:
+                        st.metric("Latest answer relevance", f"{latest['ANSWER_RELEVANCE_PCT']}%")
+                    with cols[3]:
+                        st.metric("Latest FP rate", f"{latest['FP_RATE_PCT']}%")
+            
+            with tab_quality:
+                st.markdown("**Quality score targets:**")
+                st.caption("Groundedness: >90% | Context Relevance: >85% | Answer Relevance: >85%")
+                
+                for _, row in metrics_trend.iterrows():
+                    with st.expander(f"{row['RUN_NAME']} - {row['CREATED_TIMESTAMP']}"):
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            g = row['GROUNDEDNESS_PCT']
+                            st.metric("Groundedness", f"{g}%", delta="Good" if g >= 90 else "Below target")
+                        with col2:
+                            c = row['CONTEXT_RELEVANCE_PCT']
+                            st.metric("Context Rel.", f"{c}%", delta="Good" if c >= 85 else "Below target")
+                        with col3:
+                            a = row['ANSWER_RELEVANCE_PCT']
+                            st.metric("Answer Rel.", f"{a}%", delta="Good" if a >= 85 else "Below target")
+                        with col4:
+                            fp = row['FP_RATE_PCT']
+                            st.metric("FP Rate", f"{fp}%", delta="Good" if fp <= 1 else "Above target")
+            
+            with tab_latency:
+                latency_data = metrics_trend[['CREATED_TIMESTAMP', 'AVG_LATENCY_MS', 'RECORDS_EVALUATED']].copy()
+                latency_data = latency_data.set_index('CREATED_TIMESTAMP')
+                st.line_chart(latency_data['AVG_LATENCY_MS'], use_container_width=True)
+                st.caption("Average latency (ms) per evaluation run")
         else:
-            st.info("Run evaluations to see the false positive rate trend over time.", icon=":material/info:")
+            st.info("Run evaluations to see quality metrics trends over time.", icon=":material/info:")
+            
+            with st.container(border=True):
+                st.markdown("**What metrics will be shown:**")
+                st.markdown("""
+                - **Groundedness**: Is the response supported by the retrieved context?
+                - **Context Relevance**: Is the retrieved patient data relevant to the query?
+                - **Answer Relevance**: Does the response properly address the analysis task?
+                - **False Positive Rate**: Percentage of incorrect indicator detections
+                """)
     
     st.subheader("Run evaluation")
     
     with st.container(border=True):
-        if not job_exists:
-            st.warning("Deploy the evaluation job first (see instructions above)", icon=":material/warning:")
-            st.button("Run evaluation", type="primary", icon=":material/play_arrow:", disabled=True)
-        else:
-            col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
+        col_run, col_status = st.columns([2, 1])
+        
+        with col_run:
+            sample_size = st.selectbox("Sample size", [5, 10, 25, 50], index=1, help="Number of residents to evaluate")
             
-            with col_cfg1:
-                prompt_versions = execute_query_df("""
-                    SELECT VERSION_NUMBER, IS_ACTIVE 
-                    FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS
-                    ORDER BY CREATED_TIMESTAMP DESC
-                """, session)
-                
-                if prompt_versions is not None and len(prompt_versions) > 0:
-                    version_options = prompt_versions['VERSION_NUMBER'].tolist()
-                    active_version = prompt_versions[prompt_versions['IS_ACTIVE'] == True]['VERSION_NUMBER'].tolist()
-                    default_idx = version_options.index(active_version[0]) if active_version else 0
-                    eval_prompt_version = st.selectbox("Prompt version", version_options, index=default_idx)
-                else:
-                    eval_prompt_version = st.text_input("Prompt version", value="v1.0")
-            
-            with col_cfg2:
-                model_options = [
-                    'claude-3-5-sonnet',
-                    'claude-sonnet-4-5',
-                    'claude-haiku-4-5',
-                    'mistral-large2',
-                    'llama3.1-70b'
-                ]
-                eval_model = st.selectbox("Model", model_options)
-            
-            with col_cfg3:
-                sample_sizes = [10, 25, 50, 100]
-                eval_sample_size = st.selectbox("Sample size", sample_sizes, index=0)
-            
-            eval_name = st.text_input(
-                "Evaluation name",
-                value=f"Eval_{eval_prompt_version}_{datetime.now().strftime('%Y%m%d_%H%M')}",
-                help="A descriptive name for this evaluation run"
-            )
-            
-            run_eval = st.button("Run evaluation", type="primary", icon=":material/play_arrow:")
-            
-            if run_eval:
-                with st.spinner("Starting evaluation job..."):
+            if st.button("Run Quality Evaluation", type="primary", icon=":material/play_arrow:"):
+                with st.spinner("Starting evaluation job... This takes 2-5 minutes."):
                     try:
-                        execute_query(f"""
-                            EXECUTE JOB SERVICE AGEDCARE.AGEDCARE.DRI_EVALUATION_JOB
-                            WITH PARAMETERS (
-                                RUN_NAME => '{eval_name}',
-                                PROMPT_VERSION => '{eval_prompt_version}',
-                                MODEL => '{eval_model}',
-                                SAMPLE_SIZE => {eval_sample_size}
-                            )
+                        execute_query("DROP SERVICE IF EXISTS AGEDCARE.AGEDCARE.DRI_EVAL_RUN", session)
+                        
+                        result = execute_query(f"""
+                            EXECUTE JOB SERVICE
+                            IN COMPUTE POOL FULLSTACK_COMPUTE_POOL
+                            FROM @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE
+                            SPEC = 'job-run-spec.yaml'
+                            NAME = AGEDCARE.AGEDCARE.DRI_EVAL_RUN
+                            QUERY_WAREHOUSE = COMPUTE_WH
                         """, session)
                         
-                        st.success("Evaluation job started! Results will appear when complete.", icon=":material/check_circle:")
-                        st.info("View progress in Snowsight: AI & ML → Evaluations", icon=":material/info:")
-                        
+                        if result:
+                            status = str(result[0]['STATUS']) if 'STATUS' in result[0] else str(result[0])
+                            if 'successfully' in status.lower() or 'done' in status.lower():
+                                st.success("Evaluation completed! Refreshing...", icon=":material/check_circle:")
+                                st.rerun()
+                            else:
+                                st.info(f"Job status: {status}", icon=":material/info:")
+                                st.rerun()
+                        else:
+                            st.success("Evaluation job submitted. Refreshing...", icon=":material/check_circle:")
+                            st.rerun()
                     except Exception as e:
-                        st.error(f"Failed to start evaluation job: {e}", icon=":material/error:")
+                        error_msg = str(e).lower()
+                        if 'completed' in error_msg or 'done' in error_msg:
+                            st.success("Evaluation completed! Refreshing...", icon=":material/check_circle:")
+                            st.rerun()
+                        else:
+                            st.error(f"Failed to run evaluation: {e}", icon=":material/error:")
+        
+        with col_status:
+            st.caption("Evaluates residents using LLM-as-judge to compute groundedness and relevance scores.")
+        
+        with st.expander("Manual SQL command", icon=":material/code:"):
+            st.code("""EXECUTE JOB SERVICE
+IN COMPUTE POOL FULLSTACK_COMPUTE_POOL
+FROM @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE
+SPEC = 'job-run-spec.yaml'
+NAME = AGEDCARE.AGEDCARE.DRI_EVAL_RUN
+QUERY_WAREHOUSE = COMPUTE_WH;""", language="sql")
     
     st.subheader("Evaluation history")
     
-    if tables_exist:
-        eval_history = execute_query_df("""
-            SELECT 
-                EVALUATION_ID,
-                RUN_NAME,
-                CREATED_TIMESTAMP,
-                PROMPT_VERSION,
-                MODEL_USED,
-                RECORDS_EVALUATED,
-                ROUND(FALSE_POSITIVE_RATE * 100, 2) as FP_RATE_PCT,
-                ROUND(AVG_GROUNDEDNESS_SCORE * 100, 1) as GROUNDEDNESS_PCT,
-                ROUND(AVG_LATENCY_MS, 0) as AVG_LATENCY_MS,
-                STATUS
-            FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
-            ORDER BY CREATED_TIMESTAMP DESC
-            LIMIT 20
-        """, session)
-        
-        if eval_history is not None and len(eval_history) > 0:
-            for _, row in eval_history.iterrows():
-                status_icon = ":material/check_circle:" if row['STATUS'] == 'COMPLETED' else ":material/pending:"
-                fp_rate = row['FP_RATE_PCT'] or 0
-                groundedness = row['GROUNDEDNESS_PCT'] or 0
+    eval_history = execute_query_df("""
+        SELECT 
+            EVALUATION_ID,
+            RUN_NAME,
+            CREATED_TIMESTAMP,
+            PROMPT_VERSION,
+            MODEL_USED,
+            RECORDS_EVALUATED,
+            ROUND(FALSE_POSITIVE_RATE * 100, 2) as FP_RATE_PCT,
+            ROUND(AVG_GROUNDEDNESS_SCORE * 100, 1) as GROUNDEDNESS_PCT,
+            ROUND(AVG_LATENCY_MS, 0) as AVG_LATENCY_MS,
+            STATUS
+        FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
+        ORDER BY CREATED_TIMESTAMP DESC
+        LIMIT 20
+    """, session)
+    
+    if eval_history is not None and len(eval_history) > 0:
+        for _, row in eval_history.iterrows():
+            status_icon = ":material/check_circle:" if row['STATUS'] == 'COMPLETED' else ":material/pending:"
+            fp_rate = row['FP_RATE_PCT'] or 0
+            groundedness = row['GROUNDEDNESS_PCT'] or 0
+            avg_latency = row['AVG_LATENCY_MS'] or 0
+            records = row['RECORDS_EVALUATED'] or 0
+            
+            if groundedness > 0 or fp_rate > 0:
+                expander_title = f"{row['RUN_NAME']} - FP: {fp_rate}% | Groundedness: {groundedness}%"
+            else:
+                expander_title = f"{row['RUN_NAME']} - {records} records | {int(avg_latency)}ms avg latency"
+            
+            with st.expander(expander_title, icon=status_icon):
+                col_d1, col_d2, col_d3, col_d4 = st.columns(4)
                 
-                with st.expander(f"{row['RUN_NAME']} - FP: {fp_rate}% | Groundedness: {groundedness}%", icon=status_icon):
-                    col_d1, col_d2, col_d3, col_d4 = st.columns(4)
-                    
-                    with col_d1:
-                        st.markdown(f"**Prompt:** {row['PROMPT_VERSION']}")
-                        st.markdown(f"**Model:** {row['MODEL_USED']}")
-                    
-                    with col_d2:
-                        st.markdown(f"**Records:** {row['RECORDS_EVALUATED']}")
-                        st.markdown(f"**Latency:** {row['AVG_LATENCY_MS']}ms")
-                    
-                    with col_d3:
+                with col_d1:
+                    st.markdown(f"**Prompt:** {row['PROMPT_VERSION']}")
+                    st.markdown(f"**Model:** {row['MODEL_USED']}")
+                
+                with col_d2:
+                    st.markdown(f"**Records:** {records}")
+                    st.markdown(f"**Status:** {row['STATUS']}")
+                
+                with col_d3:
+                    if groundedness > 0 or fp_rate > 0:
                         st.metric("FP Rate", f"{fp_rate}%")
-                    
-                    with col_d4:
+                    else:
+                        st.metric("Avg Latency", f"{int(avg_latency)}ms")
+                
+                with col_d4:
+                    if groundedness > 0:
                         st.metric("Groundedness", f"{groundedness}%")
-                    
-                    details = execute_query_df(f"""
-                        SELECT 
-                            RESIDENT_ID,
-                            INDICATORS_DETECTED,
-                            ROUND(GROUNDEDNESS_SCORE * 100, 1) as GROUNDEDNESS_PCT,
-                            IS_CORRECT,
-                            MISMATCH_DETAILS,
-                            LATENCY_MS
-                        FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_DETAIL
-                        WHERE EVALUATION_ID = '{row['EVALUATION_ID']}'
-                        ORDER BY RECORD_INDEX
-                    """, session)
-                    
-                    if details is not None and len(details) > 0:
-                        st.markdown("**Per-resident breakdown:**")
-                        st.dataframe(details, use_container_width=True)
-        else:
-            st.info("No evaluation history available. Run an evaluation to see results here.", icon=":material/info:")
+                    else:
+                        st.metric("Timestamp", row['CREATED_TIMESTAMP'].strftime('%Y-%m-%d %H:%M') if row['CREATED_TIMESTAMP'] else '-')
+                
+                details = execute_query_df(f"""
+                    SELECT 
+                        RESIDENT_ID,
+                        INDICATORS_DETECTED,
+                        LATENCY_MS
+                    FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_DETAIL
+                    WHERE EVALUATION_ID = '{row['EVALUATION_ID']}'
+                    ORDER BY RECORD_INDEX
+                """, session)
+                
+                if details is not None and len(details) > 0:
+                    st.markdown("**Per-resident breakdown:**")
+                    st.dataframe(details, use_container_width=True)
+    else:
+        st.info("No evaluation history available. Run an evaluation to see results here.", icon=":material/info:")
     
     st.subheader("Snowsight integration")
     

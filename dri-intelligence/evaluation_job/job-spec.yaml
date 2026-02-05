@@ -30,7 +30,7 @@ spec:
       default: "v1.0"
     MODEL:
       type: STRING
-      default: "claude-3-5-sonnet"
+      default: "claude-sonnet-4-5"
     SAMPLE_SIZE:
       type: INT
       default: 10

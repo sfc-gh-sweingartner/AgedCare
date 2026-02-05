@@ -1,0 +1,18 @@
+spec:
+  containers:
+  - name: dri-evaluation
+    image: /AGEDCARE/AGEDCARE/DRI_IMAGES/dri-evaluation:latest
+    env:
+      SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+      RUN_NAME: "Evaluation_Test"
+      PROMPT_VERSION: "v1.0"
+      MODEL: "claude-sonnet-4-5"
+      SAMPLE_SIZE: "5"
+      TRULENS_OTEL_TRACING: "1"
+    resources:
+      requests:
+        memory: 4Gi
+        cpu: 2000m
+      limits:
+        memory: 8Gi
+        cpu: 4000m

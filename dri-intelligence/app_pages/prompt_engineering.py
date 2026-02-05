@@ -10,26 +10,12 @@ with st.expander("How to use this page", expanded=False, icon=":material/help:")
 This page lets you **test and refine** the LLM prompt used to detect DRI (Deteriorating Resident Index) indicators in resident records. Use it to experiment with different models and prompt versions before deploying to production.
 
 ### How to Use
-1. **Select a resident** from the dropdown to analyze their records
-2. **Choose an LLM model** - Claude 4.5 variants recommended for best accuracy
-3. **Select a prompt version** or edit the current prompt template
-4. **Review the resident context** preview to see what data will be sent to the LLM
-5. Click **Run LLM analysis** to execute and see results
-
-### Two Analysis Options
-
-| Button | Purpose | When to Use |
-|--------|---------|-------------|
-| **Run LLM analysis** | Quick test of prompt/model | Iterating on prompt changes, checking specific residents |
-| **Run evaluation** | Full quality assessment with metrics | Before deploying to production, tracking quality over time |
-
-#### Run Evaluation Details
-The "Run evaluation" button runs the analysis AND computes quality metrics using TruLens:
-- **Groundedness**: Measures how well the AI's response is supported by the actual resident data (target: >90%)
-- **Context relevance**: Checks if the retrieved context is relevant to the clinical query (target: >85%)
-- **Answer relevance**: Validates the response properly addresses the indicators being checked (target: >85%)
-
-Results are saved to the `DRI_EVALUATION_METRICS` table and appear in the **Quality metrics** page.
+1. **Select a resident** from the dropdown (shows facility name for reference)
+2. **Client configuration** auto-selects based on resident's facility
+3. **Choose an LLM model** - Claude 4.5 variants recommended for best accuracy
+4. **Select a prompt version** or edit the current prompt template
+5. **Review the resident context** preview to see what data will be sent to the LLM
+6. Click **Run LLM analysis** to execute and see results
 
 ### Understanding Results
 - **Indicators detected**: Health conditions the AI identified in the resident's records
@@ -37,11 +23,13 @@ Results are saved to the `DRI_EVALUATION_METRICS` table and appear in the **Qual
 - **Evidence**: The specific text excerpts that support each finding
 - **Requires review**: Flagged indicators that need human verification
 
+### Quality Evaluation
+To compute quality metrics (groundedness, relevance scores), go to the **Quality Metrics** page and click **Run Quality Evaluation**. This runs a separate SPCS job with TruLens to evaluate multiple residents.
+
 ### Tips
 - Test the same resident with different models to compare accuracy
 - Save promising prompt changes as new versions before modifying further
 - Check the **Claude vs Regex** page to compare AI results against the old keyword approach
-- Use **Run evaluation** to track quality improvements after prompt changes
 - Once satisfied, save your prompt for production in the **Configuration** page
     """)
 
@@ -52,9 +40,9 @@ session = get_snowflake_session()
 @st.cache_data(ttl=300)
 def load_residents(_session):
     return execute_query_df("""
-        SELECT DISTINCT RESIDENT_ID 
-        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES
-        ORDER BY RESIDENT_ID
+        SELECT DISTINCT n.RESIDENT_ID, n.SYSTEM_KEY as FACILITY
+        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES n
+        ORDER BY n.RESIDENT_ID
     """, _session)
 
 @st.cache_data(ttl=300)
@@ -88,19 +76,38 @@ if session:
         st.subheader("Test configuration")
         
         residents = load_residents(session)
+        configs = load_configs(session)
+        
         if residents is not None and len(residents) > 0:
-            selected_resident = st.selectbox(
+            resident_options = {f"{row['RESIDENT_ID']} - {row['FACILITY']}": (row['RESIDENT_ID'], row['FACILITY']) 
+                               for _, row in residents.iterrows()}
+            selected_resident_label = st.selectbox(
                 "Select resident",
-                residents['RESIDENT_ID'].tolist(),
+                list(resident_options.keys()),
                 help="Choose a resident to analyze"
             )
+            selected_resident, resident_facility = resident_options[selected_resident_label]
         else:
             selected_resident = st.number_input("Resident ID", value=871, min_value=1)
+            resident_facility = None
         
-        configs = load_configs(session)
         if configs is not None and len(configs) > 0:
             client_options = {row['CLIENT_NAME']: row['CLIENT_SYSTEM_KEY'] for _, row in configs.iterrows()}
-            selected_client_name = st.selectbox("Client configuration", list(client_options.keys()))
+            client_names = list(client_options.keys())
+            
+            default_idx = 0
+            if resident_facility:
+                for idx, (name, key) in enumerate(client_options.items()):
+                    if key == resident_facility:
+                        default_idx = idx
+                        break
+            
+            selected_client_name = st.selectbox(
+                "Client configuration", 
+                client_names, 
+                index=default_idx,
+                help="Auto-selected based on resident's facility"
+            )
             selected_client = client_options[selected_client_name]
         else:
             selected_client = "DEMO_CLIENT_871"
@@ -208,37 +215,163 @@ if session:
         run_eval_button = st.button("Run evaluation", icon=":material/monitoring:", help="Run full evaluation and record quality metrics")
     
     if run_eval_button:
-        with st.spinner("Running evaluation with quality metrics..."):
+        with st.spinner(f"Running evaluation for resident {selected_resident}..."):
+            import time
+            import uuid
+            start_time = time.time()
+            
             try:
-                from src.ai_observability import DRIObservabilityManager
+                run_name = f"PromptTest_{selected_version}_{selected_resident}"
+                evaluation_id = str(uuid.uuid4())
                 
-                obs_manager = DRIObservabilityManager(session, selected_client)
+                execute_query(f"""
+                    INSERT INTO AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS 
+                    (EVALUATION_ID, RUN_NAME, PROMPT_VERSION, MODEL_USED, CLIENT_SYSTEM_KEY, DATASET_NAME, STATUS, TOTAL_RECORDS)
+                    VALUES ('{evaluation_id}', '{run_name}', '{selected_version}', '{selected_model}', '{selected_client}', 'SINGLE_RESIDENT', 'RUNNING', 1)
+                """, session)
                 
-                results = obs_manager.run_evaluation(
-                    prompt_version=selected_version,
-                    model=selected_model,
-                    run_name=f"PromptTest_{selected_version}_{selected_resident}",
-                    resident_ids=[selected_resident]
+                analysis_query = f"""
+                WITH resident_notes AS (
+                    SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400) || ' [' || NOTE_TYPE || ']', ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as notes_text
+                    FROM (SELECT PROGRESS_NOTE, NOTE_TYPE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 15)
+                ),
+                resident_meds AS (
+                    SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as meds_text
+                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
+                ),
+                resident_obs AS (
+                    SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as obs_text
+                    FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
+                ),
+                resident_forms AS (
+                    SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as forms_text
+                    FROM (SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 20)
+                ),
+                rag_indicators AS (
+                    SELECT LISTAGG(INDICATOR_ID || ' - ' || INDICATOR_NAME || ': ' || DEFINITION, ' || ') WITHIN GROUP (ORDER BY INDICATOR_ID) as indicators_text
+                    FROM AGEDCARE.AGEDCARE.DRI_RAG_INDICATORS
+                ),
+                full_context AS (
+                    SELECT 
+                        'PROGRESS NOTES: ' || (SELECT notes_text FROM resident_notes) ||
+                        ' MEDICATIONS: ' || (SELECT meds_text FROM resident_meds) ||
+                        ' OBSERVATIONS: ' || (SELECT obs_text FROM resident_obs) ||
+                        ' ASSESSMENT FORMS: ' || (SELECT forms_text FROM resident_forms) ||
+                        ' DRI INDICATORS TO CHECK: ' || (SELECT indicators_text FROM rag_indicators) as context
+                ),
+                prompt_template AS (
+                    SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'
                 )
+                SELECT 
+                    SNOWFLAKE.CORTEX.COMPLETE(
+                        '{selected_model}',
+                        [
+                            {{
+                                'role': 'user',
+                                'content': REPLACE(REPLACE(
+                                    (SELECT PROMPT_TEXT FROM prompt_template),
+                                    '{{resident_context}}', (SELECT context FROM full_context)
+                                ), '{{rag_indicator_context}}', '')
+                            }}
+                        ],
+                        {{
+                            'max_tokens': 8192
+                        }}
+                    ) as RESPONSE
+                """
                 
-                st.success(f"Evaluation complete!", icon=":material/check_circle:")
+                result = execute_query(analysis_query, session)
+                processing_time = int((time.time() - start_time) * 1000)
                 
-                with st.container(border=True):
-                    col_e1, col_e2, col_e3 = st.columns(3)
-                    with col_e1:
-                        groundedness = results['metrics'].get('avg_groundedness', 0) * 100
-                        st.metric("Groundedness", f"{groundedness:.1f}%")
-                    with col_e2:
-                        context_rel = results['metrics'].get('avg_context_relevance', 0) * 100
-                        st.metric("Context relevance", f"{context_rel:.1f}%")
-                    with col_e3:
-                        latency = results['metrics'].get('avg_latency_ms', 0)
-                        st.metric("Latency", f"{latency}ms")
-                
-                st.info("Full metrics available in the **Quality metrics** page.", icon=":material/info:")
-                
-            except ImportError:
-                st.error("AI Observability module not available. Run setup_ai_observability.sql first.", icon=":material/error:")
+                if result:
+                    raw_response = result[0]['RESPONSE']
+                    try:
+                        response_obj = json.loads(raw_response)
+                        response_text = response_obj.get('choices', [{}])[0].get('messages', raw_response)
+                    except (json.JSONDecodeError, TypeError):
+                        response_text = raw_response
+                    
+                    indicators_detected = 0
+                    try:
+                        cleaned = response_text.strip()
+                        if cleaned.startswith('```json'):
+                            cleaned = cleaned[7:]
+                        if cleaned.endswith('```'):
+                            cleaned = cleaned[:-3]
+                        json_start = cleaned.find('{')
+                        json_end = cleaned.rfind('}') + 1
+                        if json_start >= 0 and json_end > json_start:
+                            parsed = json.loads(cleaned[json_start:json_end])
+                            if 'summary' in parsed:
+                                indicators_detected = parsed['summary'].get('indicators_detected', 0)
+                            elif 'indicators' in parsed:
+                                indicators_detected = len([i for i in parsed['indicators'] if i.get('detected', True)])
+                    except:
+                        pass
+                    
+                    detail_id = str(uuid.uuid4())
+                    execute_query(f"""
+                        INSERT INTO AGEDCARE.AGEDCARE.DRI_EVALUATION_DETAIL 
+                        (DETAIL_ID, EVALUATION_ID, RESIDENT_ID, RECORD_INDEX, INDICATORS_DETECTED, LATENCY_MS)
+                        VALUES ('{detail_id}', '{evaluation_id}', {selected_resident}, 0, {indicators_detected}, {processing_time})
+                    """, session)
+                    
+                    execute_query(f"""
+                        UPDATE AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
+                        SET RECORDS_EVALUATED = 1, AVG_LATENCY_MS = {processing_time}, STATUS = 'COMPLETED'
+                        WHERE EVALUATION_ID = '{evaluation_id}'
+                    """, session)
+                    
+                    st.success(f"Evaluation complete! Processed in {processing_time}ms", icon=":material/check_circle:")
+                    
+                    with st.container(border=True):
+                        col_e1, col_e2, col_e3 = st.columns(3)
+                        with col_e1:
+                            st.metric("Indicators detected", indicators_detected)
+                        with col_e2:
+                            st.metric("Latency", f"{processing_time}ms")
+                        with col_e3:
+                            st.metric("Evaluation ID", evaluation_id[:8] + "...")
+                    
+                    tab1, tab2 = st.tabs(["Formatted results", "Raw JSON"])
+                    
+                    with tab1:
+                        try:
+                            cleaned = response_text.strip()
+                            if cleaned.startswith('```json'):
+                                cleaned = cleaned[7:]
+                            if cleaned.endswith('```'):
+                                cleaned = cleaned[:-3]
+                            json_start = cleaned.find('{')
+                            json_end = cleaned.rfind('}') + 1
+                            if json_start >= 0 and json_end > json_start:
+                                parsed = json.loads(cleaned[json_start:json_end])
+                                
+                                if 'indicators' in parsed and parsed['indicators']:
+                                    st.subheader("Detected indicators")
+                                    for ind in parsed['indicators']:
+                                        confidence = ind.get('confidence', 'N/A')
+                                        with st.expander(f"{ind.get('deficit_id', 'Unknown')} - {ind.get('deficit_name', 'Unknown')} ({confidence})", expanded=False, icon=":material/check_circle:"):
+                                            st.markdown(f"**Reasoning:** {ind.get('reasoning', 'N/A')}")
+                                            if 'evidence' in ind and ind['evidence']:
+                                                st.markdown("**Evidence:**")
+                                                for ev in ind['evidence']:
+                                                    st.caption(f"- {ev.get('text_excerpt', 'N/A')}")
+                        except Exception as e:
+                            st.warning(f"Could not parse results: {e}", icon=":material/warning:")
+                    
+                    with tab2:
+                        st.code(response_text, language="json")
+                    
+                    st.info("Results saved to evaluation history. View in **Quality metrics** page.", icon=":material/info:")
+                else:
+                    execute_query(f"""
+                        UPDATE AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
+                        SET STATUS = 'FAILED', ERROR_MESSAGE = 'No response from LLM'
+                        WHERE EVALUATION_ID = '{evaluation_id}'
+                    """, session)
+                    st.error("No response from LLM", icon=":material/error:")
+                    
             except Exception as e:
                 st.error(f"Evaluation failed: {e}", icon=":material/error:")
     

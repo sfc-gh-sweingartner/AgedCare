@@ -735,14 +735,15 @@ DRI Intelligence POC (Implemented)
 This page surfaces AI Observability metrics in a clinician-friendly format:
 - **Current Quality Status**: Latest evaluation groundedness, context relevance, answer relevance, FP rate
 - **False Positive Rate Trend**: Chart showing FP rate over time with <1% target line
-- **Run Evaluation**: Form to trigger new evaluation with prompt/model selection
+- **Run Quality Evaluation**: Button to trigger SPCS job evaluation (runs TruLens in separate container)
+- **Sample Size Selection**: Choose number of residents for evaluation (10, 25, 50, All)
 - **Evaluation History**: List of all evaluation runs with drill-down to per-resident details
-- **Ground Truth Management**: Manage validated test cases for accuracy measurement
 
 **Technical Integration**:
 - Uses TruLens for LLM-as-judge evaluation (groundedness, relevance scores)
+- TruLens runs in separate SPCS Job container (not in Streamlit app)
+- Triggered via `EXECUTE JOB SERVICE` command from UI
 - Stores metrics in DRI_EVALUATION_METRICS and DRI_EVALUATION_DETAIL tables
-- TruLens packages required (no fallback - errors shown if not installed)
 
 ---
 
@@ -874,7 +875,7 @@ Existing ETL ──▶ 6 Source Tables ──▶ Client Config ──▶ LLM Eng
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Database schema | ✅ Complete | All 15+ tables created in AGEDCARE.AGEDCARE |
-| Demo data loading | ✅ Complete | Resident 871 data loaded from Excel |
+| Demo data loading | ✅ Complete | 50 residents across 3 facilities |
 | Cortex Search service | ✅ Complete | DRI_INDICATOR_SEARCH with 33 indicators |
 | Dashboard page | ✅ Complete | Metrics display, connection status |
 | Prompt Engineering page | ✅ Complete | Resident/model/version selector, run analysis |
@@ -927,10 +928,12 @@ This document has been updated based on feedback from Telstra Health's data engi
 | 1.2 | 2025-01-27 | Enhanced traceability, separation of detection vs calculation |
 | 1.3 | 2025-01-27 | Aggregate approval workflow, on-demand testing |
 | 1.4 | 2026-01-30 | Implementation sync: Updated UI structure to match actual build (7 pages), added Claude vs Regex comparison page, added Batch Testing page, marked all features as IMPLEMENTED, added implementation status table |
+| 1.5 | 2026-02-03 | AI Observability integration with TruLens |
+| 1.6 | 2026-02-05 | UI improvements: Run Quality Evaluation button, resident dropdown shows facility, auto-select client config, expanded test data to 50 residents |
 
 ---
 
-*Document Version: 1.5*  
+*Document Version: 1.6*  
 *Created: 2025-01-27*  
-*Updated: 2026-02-03 (AI Observability integration)*  
+*Updated: 2026-02-05 (UI improvements, test data expansion)*  
 *Status: Approved*

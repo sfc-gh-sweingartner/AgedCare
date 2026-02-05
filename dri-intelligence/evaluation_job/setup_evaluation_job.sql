@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS DRI_EVALUATION_METRICS (
     FALSE_POSITIVE_RATE FLOAT DEFAULT 0,
     PRECISION_SCORE FLOAT DEFAULT 0,
     AVG_LATENCY_MS INT DEFAULT 0,
-    STATUS VARCHAR(50) DEFAULT 'PENDING'
+    STATUS VARCHAR(50) DEFAULT 'PENDING',
+    ERROR_MESSAGE VARCHAR(4000)
 );
 
 CREATE TABLE IF NOT EXISTS DRI_EVALUATION_DETAIL (
@@ -82,79 +83,152 @@ CREATE TABLE IF NOT EXISTS DRI_GROUND_TRUTH (
 );
 
 -- ============================================================================
--- Step 3: Create External Access Integration for PyPI (if needed)
+-- Step 3: Grant AI Observability Privileges
 -- ============================================================================
--- Note: The container needs network access to reach Snowflake endpoints.
--- If you don't already have an external access integration, create one:
+-- These privileges are REQUIRED for TruLens to register applications and runs
+-- in Snowflake AI Observability (visible in Snowsight > AI & ML > Evaluations)
 
--- CREATE OR REPLACE NETWORK RULE snowflake_egress_rule
---     MODE = EGRESS
---     TYPE = HOST_PORT
---     VALUE_LIST = ('*.snowflakecomputing.com:443', '*.amazonaws.com:443');
+-- Create a role for AI Observability users (if not exists)
+CREATE ROLE IF NOT EXISTS AI_OBSERVABILITY_USER;
+
+-- Grant CORTEX_USER database role (required for Cortex LLM access)
+GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE AI_OBSERVABILITY_USER;
+
+-- Grant AI_OBSERVABILITY_EVENTS_LOOKUP application role (required to view evaluation data)
+GRANT APPLICATION ROLE SNOWFLAKE.AI_OBSERVABILITY_EVENTS_LOOKUP TO ROLE AI_OBSERVABILITY_USER;
+
+-- Grant CREATE EXTERNAL AGENT privilege (required to register applications)
+GRANT CREATE EXTERNAL AGENT ON SCHEMA AGEDCARE.AGEDCARE TO ROLE AI_OBSERVABILITY_USER;
+
+-- Grant CREATE TASK privilege (required for evaluation runs)
+GRANT CREATE TASK ON SCHEMA AGEDCARE.AGEDCARE TO ROLE AI_OBSERVABILITY_USER;
+
+-- Grant EXECUTE TASK privilege (required to execute evaluation tasks)
+GRANT EXECUTE TASK ON ACCOUNT TO ROLE AI_OBSERVABILITY_USER;
+
+-- Grant usage on database and schema
+GRANT USAGE ON DATABASE AGEDCARE TO ROLE AI_OBSERVABILITY_USER;
+GRANT USAGE ON SCHEMA AGEDCARE.AGEDCARE TO ROLE AI_OBSERVABILITY_USER;
+
+-- Grant usage on warehouse
+GRANT USAGE ON WAREHOUSE COMPUTE_WH TO ROLE AI_OBSERVABILITY_USER;
+
+-- Grant the role to ACCOUNTADMIN and SYSADMIN
+GRANT ROLE AI_OBSERVABILITY_USER TO ROLE ACCOUNTADMIN;
+GRANT ROLE AI_OBSERVABILITY_USER TO ROLE SYSADMIN;
+
+-- Grant to specific users who will run evaluations (add your users here)
+-- GRANT ROLE AI_OBSERVABILITY_USER TO USER YOUR_USERNAME;
+
+-- Also grant privileges directly to ACCOUNTADMIN for SPCS job execution
+GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE ACCOUNTADMIN;
+GRANT APPLICATION ROLE SNOWFLAKE.AI_OBSERVABILITY_EVENTS_LOOKUP TO ROLE ACCOUNTADMIN;
+GRANT APPLICATION ROLE SNOWFLAKE.AI_OBSERVABILITY_ADMIN TO ROLE ACCOUNTADMIN;
+GRANT CREATE EXTERNAL AGENT ON SCHEMA AGEDCARE.AGEDCARE TO ROLE ACCOUNTADMIN;
+
+-- ============================================================================
+-- Step 4: Create Stage for Job Spec (if using stage-based deployment)
+-- ============================================================================
+
+CREATE STAGE IF NOT EXISTS DRI_EVAL_STAGE
+    ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+
+-- ============================================================================
+-- Step 5: Create or Replace the Job Service
+-- ============================================================================
+-- Note: The job spec files (job-spec.yaml, job-run-spec.yaml) should be uploaded
+-- to the DRI_EVAL_STAGE before running EXECUTE JOB SERVICE
+
+-- Option A: Inline spec (for testing)
+-- This creates a job service with inline specification
+
+-- DROP SERVICE IF EXISTS DRI_EVALUATION_JOB;
+-- 
+-- CREATE SERVICE IF NOT EXISTS DRI_EVALUATION_JOB
+--     IN COMPUTE POOL FULLSTACK_COMPUTE_POOL
+--     FROM SPECIFICATION $$
+-- spec:
+--   containers:
+--   - name: dri-evaluation
+--     image: /AGEDCARE/AGEDCARE/DRI_IMAGES/dri-evaluation:latest
+--     env:
+--       SNOWFLAKE_DATABASE: "AGEDCARE"
+--       SNOWFLAKE_SCHEMA: "AGEDCARE"
+--       SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+--       TRULENS_OTEL_TRACING: "1"
+--     resources:
+--       requests:
+--         memory: 4Gi
+--         cpu: 2000m
+--       limits:
+--         memory: 8Gi
+--         cpu: 4000m
+-- $$
+--     MIN_INSTANCES = 0
+--     MAX_INSTANCES = 1
+--     AUTO_SUSPEND_SECS = 300
+--     QUERY_WAREHOUSE = COMPUTE_WH;
+
+-- Option B: Execute as Job Service (recommended)
+-- Run evaluations on-demand without maintaining a persistent service:
 --
--- CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION snowflake_egress_integration
---     ALLOWED_NETWORK_RULES = (snowflake_egress_rule)
---     ENABLED = TRUE;
+-- EXECUTE JOB SERVICE
+-- IN COMPUTE POOL FULLSTACK_COMPUTE_POOL
+-- FROM @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE
+-- SPEC = 'job-run-spec.yaml'
+-- NAME = AGEDCARE.AGEDCARE.DRI_EVAL_RUN
+-- QUERY_WAREHOUSE = COMPUTE_WH;
 
 -- ============================================================================
--- Step 4: Create the Job Service
+-- Step 6: Grant privileges on the stage and tables
 -- ============================================================================
 
-CREATE SERVICE IF NOT EXISTS DRI_EVALUATION_JOB
-    IN COMPUTE POOL STREAMLIT_COMPUTE_POOL
-    FROM SPECIFICATION $$
-spec:
-  containers:
-  - name: dri-evaluation
-    image: /AGEDCARE/AGEDCARE/DRI_IMAGES/dri-evaluation:latest
-    env:
-      SNOWFLAKE_DATABASE: "AGEDCARE"
-      SNOWFLAKE_SCHEMA: "AGEDCARE"
-      SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
-      TRULENS_OTEL_TRACING: "1"
-    resources:
-      requests:
-        memory: 4Gi
-        cpu: 2000m
-      limits:
-        memory: 8Gi
-        cpu: 4000m
-$$
-    MIN_INSTANCES = 0
-    MAX_INSTANCES = 1
-    AUTO_SUSPEND_SECS = 300
-    QUERY_WAREHOUSE = COMPUTE_WH;
+GRANT READ, WRITE ON STAGE DRI_EVAL_STAGE TO ROLE AI_OBSERVABILITY_USER;
+GRANT SELECT, INSERT, UPDATE ON TABLE DRI_EVALUATION_METRICS TO ROLE AI_OBSERVABILITY_USER;
+GRANT SELECT, INSERT ON TABLE DRI_EVALUATION_DETAIL TO ROLE AI_OBSERVABILITY_USER;
+GRANT SELECT ON TABLE DRI_GROUND_TRUTH TO ROLE AI_OBSERVABILITY_USER;
+GRANT SELECT ON TABLE DRI_PROMPT_VERSIONS TO ROLE AI_OBSERVABILITY_USER;
+GRANT SELECT ON TABLE DRI_RAG_INDICATORS TO ROLE AI_OBSERVABILITY_USER;
+GRANT SELECT ON TABLE ACTIVE_RESIDENT_NOTES TO ROLE AI_OBSERVABILITY_USER;
+GRANT SELECT ON TABLE ACTIVE_RESIDENT_MEDICATION TO ROLE AI_OBSERVABILITY_USER;
+GRANT SELECT ON TABLE ACTIVE_RESIDENT_OBSERVATIONS TO ROLE AI_OBSERVABILITY_USER;
+GRANT SELECT ON TABLE ACTIVE_RESIDENT_ASSESSMENT_FORMS TO ROLE AI_OBSERVABILITY_USER;
 
 -- ============================================================================
--- Step 5: Grant necessary privileges
+-- Step 7: Verify setup
 -- ============================================================================
 
--- Grant usage on the service to roles that need to run evaluations
-GRANT USAGE ON SERVICE DRI_EVALUATION_JOB TO ROLE SYSADMIN;
-GRANT USAGE ON SERVICE DRI_EVALUATION_JOB TO ROLE DATA_ENGINEER;
+-- Check privileges
+SHOW GRANTS TO ROLE AI_OBSERVABILITY_USER;
 
--- ============================================================================
--- Step 6: Verify deployment
--- ============================================================================
+-- Check tables exist
+SHOW TABLES LIKE 'DRI_EVALUATION%';
 
-SHOW SERVICES LIKE 'DRI_EVALUATION%';
-SELECT SYSTEM$GET_SERVICE_STATUS('DRI_EVALUATION_JOB');
+-- Check stage exists
+SHOW STAGES LIKE 'DRI_EVAL%';
 
 -- ============================================================================
 -- Usage Examples
 -- ============================================================================
 
--- Run an evaluation:
--- EXECUTE JOB SERVICE DRI_EVALUATION_JOB
---     WITH PARAMETERS (
---         RUN_NAME => 'MyEvaluation',
---         PROMPT_VERSION => 'v1.0',
---         MODEL => 'claude-3-5-sonnet',
---         SAMPLE_SIZE => 10
---     );
+-- Run an evaluation using EXECUTE JOB SERVICE:
+-- 
+-- -- First, drop any existing job run
+-- DROP SERVICE IF EXISTS AGEDCARE.AGEDCARE.DRI_EVAL_RUN;
+-- 
+-- -- Then execute the job
+-- EXECUTE JOB SERVICE
+-- IN COMPUTE POOL FULLSTACK_COMPUTE_POOL
+-- FROM @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE
+-- SPEC = 'job-run-spec.yaml'
+-- NAME = AGEDCARE.AGEDCARE.DRI_EVAL_RUN
+-- QUERY_WAREHOUSE = COMPUTE_WH;
 
 -- Check job status:
--- SELECT SYSTEM$GET_SERVICE_STATUS('DRI_EVALUATION_JOB');
+-- SELECT SYSTEM$GET_SERVICE_STATUS('AGEDCARE.AGEDCARE.DRI_EVAL_RUN');
 
 -- View logs:
--- SELECT SYSTEM$GET_SERVICE_LOGS('DRI_EVALUATION_JOB', 0, 'dri-evaluation');
+-- SELECT SYSTEM$GET_SERVICE_LOGS('AGEDCARE.AGEDCARE.DRI_EVAL_RUN', 0, 'dri-evaluation');
+
+-- View results in Snowsight:
+-- Navigate to: AI & ML > Evaluations > DRI_INTELLIGENCE_AGENT
