@@ -28,7 +28,7 @@ from trulens.core import TruSession
 from trulens.core.otel.instrument import instrument
 from trulens.otel.semconv.trace import SpanAttributes
 from trulens.connectors.snowflake import SnowflakeConnector
-from trulens.apps.custom import TruApp
+from trulens.apps.app import TruApp
 from trulens.core.run import RunConfig
 
 

@@ -3,8 +3,6 @@ snowflake-snowpark-python>=1.0.0
 snowflake-ml-python>=1.5.0
 pandas>=2.0.0
 
-# TruLens packages for Snowflake AI Observability integration
-trulens-core>=2.1.2
-trulens-connectors-snowflake>=2.1.2
-trulens-providers-cortex>=2.1.2
-trulens-apps-custom>=2.1.2
+# TruLens - single unified package for Snowflake AI Observability
+# Includes: trulens.apps.app.TruApp, trulens.connectors.snowflake, trulens.providers.cortex
+trulens>=2.1.2
