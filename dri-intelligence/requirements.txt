@@ -1,6 +1,0 @@
-# Requirements for CREATE STREAMLIT FROM @git_repo deployment
-# Keep in sync with pyproject.toml for snow streamlit deploy
-streamlit>=1.50.0
-pandas>=2.0.0
-snowflake-snowpark-python>=1.0.0
-openpyxl>=3.0.0
