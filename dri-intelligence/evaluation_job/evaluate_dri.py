@@ -470,6 +470,8 @@ def main():
     parser.add_argument('--app-name', type=str, default='DRI_INTELLIGENCE_AGENT',
                         help='Application name in AI Observability')
     
+    args = parser.parse_args()
+    
     print("="*60)
     print("DRI Evaluation Job - Snowflake AI Observability")
     print("="*60)
@@ -504,6 +506,18 @@ def main():
             "schema": schema,
         }).create()
         print("  Connected via SPCS OAuth token")
+    else:
+        print("  No SPCS token found, using environment credentials")
+        session = Session.builder.configs({
+            "account": os.environ.get("SNOWFLAKE_ACCOUNT"),
+            "user": os.environ.get("SNOWFLAKE_USER"),
+            "password": os.environ.get("SNOWFLAKE_PASSWORD"),
+            "role": os.environ.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
+            "warehouse": os.environ.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
+            "database": os.environ.get("SNOWFLAKE_DATABASE", "AGEDCARE"),
+            "schema": os.environ.get("SNOWFLAKE_SCHEMA", "AGEDCARE"),
+        }).create()
+        print("  Connected via username/password")
     
     db_config = get_pending_run_config(session)
     if db_config:
@@ -532,20 +546,6 @@ def main():
         args.run_name = f"Eval_{args.prompt_version}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
     print(f"\n  Final config: run_name={args.run_name}, model={args.model}, sample={args.sample_size}")
-    
-    # Continue with else branch for non-SPCS connection
-    if not os.path.exists(token_path):
-        print("  No SPCS token found, using environment credentials")
-        session = Session.builder.configs({
-            "account": os.environ.get("SNOWFLAKE_ACCOUNT"),
-            "user": os.environ.get("SNOWFLAKE_USER"),
-            "password": os.environ.get("SNOWFLAKE_PASSWORD"),
-            "role": os.environ.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
-            "warehouse": os.environ.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
-            "database": os.environ.get("SNOWFLAKE_DATABASE", "AGEDCARE"),
-            "schema": os.environ.get("SNOWFLAKE_SCHEMA", "AGEDCARE"),
-        }).create()
-        print("  Connected via username/password")
     
     try:
         results = run_evaluation(
