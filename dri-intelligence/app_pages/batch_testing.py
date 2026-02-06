@@ -164,7 +164,7 @@ if session:
 The job will read this config from `DRI_EVAL_RUNS` table.
                     """)
                     
-                    result = execute_query(job_spec_update, session, timeout=300)
+                    result = execute_query(job_spec_update, session)
                     
                     if result:
                         status = result[0].get('status', str(result[0])) if result[0] else 'Unknown'

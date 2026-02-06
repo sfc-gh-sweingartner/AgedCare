@@ -214,7 +214,7 @@ if session:
                         EXTERNAL_ACCESS_INTEGRATIONS = (PYPI_ACCESS_INTEGRATION)
                         """
                         
-                        result = execute_query(job_sql, session, timeout=300)
+                        result = execute_query(job_sql, session)
                         
                         if result:
                             status = str(result[0]) if result[0] else 'Unknown'
