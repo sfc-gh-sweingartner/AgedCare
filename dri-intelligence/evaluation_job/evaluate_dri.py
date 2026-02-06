@@ -523,16 +523,12 @@ def main():
     if db_config:
         print(f"\n  Found pending run in DRI_EVAL_RUNS: {db_config['run_name']}")
         run_id_from_db = db_config['run_id']
-        if args.run_name is None:
-            args.run_name = db_config['run_name']
-        if args.prompt_version is None:
-            args.prompt_version = db_config['prompt_version']
-        if args.model is None:
-            args.model = db_config['model']
-        if args.sample_size is None:
-            args.sample_size = db_config['sample_size']
+        args.run_name = db_config['run_name']
+        args.prompt_version = db_config['prompt_version'] or args.prompt_version
+        args.model = db_config['model'] or args.model
+        args.sample_size = db_config['sample_size'] or args.sample_size
     else:
-        print("\n  No pending runs in DB, using defaults/env vars")
+        print("\n  No pending runs in DB, using command line args/env vars")
         if args.run_name is None:
             args.run_name = os.environ.get('RUN_NAME', f"Eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
         if args.prompt_version is None:
