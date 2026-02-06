@@ -4,7 +4,8 @@ Interactive page for testing and tuning LLM prompts:
 - Select resident and client configuration
 - Choose model (Claude 4.5, etc.) and prompt version
 - Edit prompts with variable placeholders
-- Run analysis and view JSON results
+- Run single analysis and view JSON results
+- Run SPCS evaluation job for AI Observability metrics (Snowsight)
 - Save new prompt versions
 
 Uses Snowflake Cortex Complete for LLM inference.
@@ -171,7 +172,67 @@ if session:
     
     st.subheader("🚀 Run analysis")
     
-    run_button = st.button("🚀 Run LLM analysis", type="primary")
+    col_run1, col_run2 = st.columns([1, 1])
+    
+    with col_run1:
+        run_button = st.button("🧪 Run Single Analysis", type="primary", use_container_width=True, help="Test prompt on selected resident")
+    
+    with col_run2:
+        run_eval_button = st.button("📊 Run Evaluation (AI Observability)", use_container_width=True, help="Trigger SPCS job for Snowsight Evaluations")
+    
+    if run_eval_button:
+        from datetime import datetime
+        st.markdown("### 🔬 Running AI Observability Evaluation")
+        
+        with st.form("eval_form"):
+            eval_col1, eval_col2 = st.columns(2)
+            with eval_col1:
+                eval_run_name = st.text_input("Run Name", value=f"Prompt_{selected_version}_{datetime.now().strftime('%Y%m%d_%H%M')}")
+                eval_sample_size = st.selectbox("Sample Size", [5, 10, 20, 50], index=1)
+            with eval_col2:
+                st.info(f"Model: {selected_model}\nPrompt: {selected_version}")
+            
+            submit_eval = st.form_submit_button("🚀 Start Evaluation Job")
+            
+            if submit_eval:
+                job_name = f"DRI_EVAL_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                
+                try:
+                    execute_query(f"DROP SERVICE IF EXISTS AGEDCARE.AGEDCARE.{job_name}", session)
+                    
+                    with st.spinner("Executing SPCS evaluation job..."):
+                        job_sql = f"""
+                        EXECUTE JOB SERVICE
+                        IN COMPUTE POOL FULLSTACK_COMPUTE_POOL
+                        FROM @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE
+                        SPEC = 'job-run-spec.yaml'
+                        NAME = AGEDCARE.AGEDCARE.{job_name}
+                        QUERY_WAREHOUSE = COMPUTE_WH
+                        EXTERNAL_ACCESS_INTEGRATIONS = (PYPI_ACCESS_INTEGRATION)
+                        """
+                        
+                        result = execute_query(job_sql, session, timeout=300)
+                        
+                        if result:
+                            status = str(result[0]) if result[0] else 'Unknown'
+                            
+                            if 'DONE' in status.upper() or 'completed' in status.lower():
+                                st.success(f"""
+                                ✅ Evaluation job completed!
+                                
+                                **View results in Snowsight:**
+                                AI & ML > Evaluations > DRI_INTELLIGENCE_AGENT
+                                
+                                Run name: `{eval_run_name}` (or spec default)
+                                """)
+                            else:
+                                st.info(f"Job status: {status}")
+                        else:
+                            st.warning("Job started. Check Snowsight > AI & ML > Evaluations for results.")
+                            
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+                    st.warning("Ensure SPCS container is deployed. See evaluation_job/README.md")
     
     if run_button:
         with st.spinner(f"Analyzing resident {selected_resident} with {selected_model}..."):
@@ -414,6 +475,9 @@ if session:
                     st.error("No response from LLM")
             except Exception as e:
                 st.error(f"Analysis failed: {e}")
+    
+    st.markdown("---")
+    st.caption("💡 **Tip:** Use 'Run Single Analysis' to test prompts quickly. Use 'Run Evaluation' to create traceable evaluations in Snowsight > AI & ML > Evaluations.")
 
 else:
     st.error("Failed to connect to Snowflake")
