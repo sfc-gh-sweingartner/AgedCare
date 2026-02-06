@@ -198,6 +198,13 @@ if session:
                 job_name = f"DRI_EVAL_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 
                 try:
+                    execute_query(f"""
+                        INSERT INTO AGEDCARE.AGEDCARE.DRI_EVAL_RUNS 
+                        (RUN_NAME, PROMPT_VERSION, MODEL, SAMPLE_SIZE, STATUS, JOB_NAME)
+                        VALUES ('{eval_run_name}', '{selected_version}', '{selected_model}', {eval_sample_size}, 'PENDING', '{job_name}')
+                    """, session)
+                    st.success(f"✅ Evaluation queued: **{eval_run_name}**")
+                    
                     execute_query(f"DROP SERVICE IF EXISTS AGEDCARE.AGEDCARE.{job_name}", session)
                     
                     with st.spinner("Executing SPCS evaluation job..."):

@@ -410,28 +410,72 @@ def also_store_to_custom_tables(
         print(f"  Warning: Could not store to custom tables: {e}")
 
 
+def get_pending_run_config(session: Session) -> Optional[Dict[str, Any]]:
+    """
+    Check DRI_EVAL_RUNS table for a pending run configuration.
+    This allows the Streamlit app to queue evaluations without hardcoding.
+    """
+    try:
+        result = session.sql("""
+            SELECT RUN_ID, RUN_NAME, PROMPT_VERSION, MODEL, SAMPLE_SIZE, JOB_NAME
+            FROM AGEDCARE.AGEDCARE.DRI_EVAL_RUNS
+            WHERE STATUS = 'PENDING'
+            ORDER BY CREATED_AT ASC
+            LIMIT 1
+        """).collect()
+        
+        if result:
+            row = result[0]
+            session.sql(f"""
+                UPDATE AGEDCARE.AGEDCARE.DRI_EVAL_RUNS 
+                SET STATUS = 'RUNNING', STARTED_AT = CURRENT_TIMESTAMP()
+                WHERE RUN_ID = '{row['RUN_ID']}'
+            """).collect()
+            
+            return {
+                'run_id': row['RUN_ID'],
+                'run_name': row['RUN_NAME'],
+                'prompt_version': row['PROMPT_VERSION'] or 'v1.0',
+                'model': row['MODEL'] or 'claude-sonnet-4-5',
+                'sample_size': row['SAMPLE_SIZE'] or 10,
+                'job_name': row['JOB_NAME']
+            }
+    except Exception as e:
+        print(f"  Note: Could not check DRI_EVAL_RUNS table: {e}")
+    return None
+
+
+def update_run_status(session: Session, run_id: str, status: str):
+    """Update the status of a run in DRI_EVAL_RUNS table."""
+    try:
+        session.sql(f"""
+            UPDATE AGEDCARE.AGEDCARE.DRI_EVAL_RUNS 
+            SET STATUS = '{status}', COMPLETED_AT = CURRENT_TIMESTAMP()
+            WHERE RUN_ID = '{run_id}'
+        """).collect()
+    except Exception as e:
+        print(f"  Warning: Could not update run status: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='DRI Evaluation Job - Snowflake AI Observability')
     parser.add_argument('--run-name', type=str, default=None, 
-                        help='Name for this evaluation run (auto-generated if not provided)')
-    parser.add_argument('--prompt-version', type=str, default='v1.0', 
+                        help='Name for this evaluation run (reads from DB if not provided)')
+    parser.add_argument('--prompt-version', type=str, default=None, 
                         help='Prompt version to evaluate')
-    parser.add_argument('--model', type=str, default='claude-sonnet-4-5', 
+    parser.add_argument('--model', type=str, default=None, 
                         help='LLM model to use')
-    parser.add_argument('--sample-size', type=int, default=10, 
+    parser.add_argument('--sample-size', type=int, default=None, 
                         help='Number of residents to evaluate')
     parser.add_argument('--app-name', type=str, default='DRI_INTELLIGENCE_AGENT',
                         help='Application name in AI Observability')
-    
-    args = parser.parse_args()
-    
-    if args.run_name is None:
-        args.run_name = f"Eval_{args.prompt_version}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
     print("="*60)
     print("DRI Evaluation Job - Snowflake AI Observability")
     print("="*60)
     print("\nConnecting to Snowflake...")
+    
+    run_id_from_db = None
     
     token_path = "/snowflake/session/token"
     
@@ -460,7 +504,37 @@ def main():
             "schema": schema,
         }).create()
         print("  Connected via SPCS OAuth token")
+    
+    db_config = get_pending_run_config(session)
+    if db_config:
+        print(f"\n  Found pending run in DRI_EVAL_RUNS: {db_config['run_name']}")
+        run_id_from_db = db_config['run_id']
+        if args.run_name is None:
+            args.run_name = db_config['run_name']
+        if args.prompt_version is None:
+            args.prompt_version = db_config['prompt_version']
+        if args.model is None:
+            args.model = db_config['model']
+        if args.sample_size is None:
+            args.sample_size = db_config['sample_size']
     else:
+        print("\n  No pending runs in DB, using defaults/env vars")
+        if args.run_name is None:
+            args.run_name = os.environ.get('RUN_NAME', f"Eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        if args.prompt_version is None:
+            args.prompt_version = os.environ.get('PROMPT_VERSION', 'v1.0')
+        if args.model is None:
+            args.model = os.environ.get('MODEL', 'claude-sonnet-4-5')
+        if args.sample_size is None:
+            args.sample_size = int(os.environ.get('SAMPLE_SIZE', '10'))
+    
+    if not args.run_name:
+        args.run_name = f"Eval_{args.prompt_version}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    print(f"\n  Final config: run_name={args.run_name}, model={args.model}, sample={args.sample_size}")
+    
+    # Continue with else branch for non-SPCS connection
+    if not os.path.exists(token_path):
         print("  No SPCS token found, using environment credentials")
         session = Session.builder.configs({
             "account": os.environ.get("SNOWFLAKE_ACCOUNT"),
@@ -486,7 +560,12 @@ def main():
         print(f"\nResults Summary:")
         print(json.dumps(results, indent=2, default=str))
         
+        if run_id_from_db:
+            update_run_status(session, run_id_from_db, 'COMPLETED')
+        
     except Exception as e:
+        if run_id_from_db:
+            update_run_status(session, run_id_from_db, 'FAILED')
         print(f"\nERROR: {e}")
         import traceback
         traceback.print_exc()

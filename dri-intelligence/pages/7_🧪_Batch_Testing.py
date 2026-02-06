@@ -137,6 +137,13 @@ if session:
             job_name = f"DRI_EVAL_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             
             try:
+                insert_run = execute_query(f"""
+                    INSERT INTO AGEDCARE.AGEDCARE.DRI_EVAL_RUNS 
+                    (RUN_NAME, PROMPT_VERSION, MODEL, SAMPLE_SIZE, STATUS, JOB_NAME)
+                    VALUES ('{run_name}', '{prompt_version}', '{model}', {sample_size}, 'PENDING', '{job_name}')
+                """, session)
+                st.success(f"✅ Evaluation run queued: **{run_name}**")
+                
                 drop_result = execute_query(f"""
                     DROP SERVICE IF EXISTS AGEDCARE.AGEDCARE.{job_name}
                 """, session)
@@ -152,16 +159,15 @@ if session:
                     EXTERNAL_ACCESS_INTEGRATIONS = (PYPI_ACCESS_INTEGRATION)
                     """
                     
-                    st.code(f"""
--- Job Configuration:
-RUN_NAME: {run_name}
-PROMPT_VERSION: {prompt_version}
-MODEL: {model}
-SAMPLE_SIZE: {sample_size}
+                    st.info(f"""
+**Evaluation Configuration:**
+- Run Name: `{run_name}`
+- Prompt Version: `{prompt_version}`
+- Model: `{model}`
+- Sample Size: `{sample_size}`
 
--- Note: Environment variables are set in job-run-spec.yaml
--- To use custom values, update the spec file or create a dynamic spec
-                    """, language="sql")
+The job will read this config from `DRI_EVAL_RUNS` table.
+                    """)
                     
                     result = execute_query(job_spec_update, session, timeout=300)
                     
