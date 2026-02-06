@@ -167,9 +167,9 @@ The job will read this config from `DRI_EVAL_RUNS` table.
                     result = execute_query(job_spec_update, session)
                     
                     if result:
-                        status = result[0].get('status', str(result[0])) if result[0] else 'Unknown'
+                        status = str(result[0]) if result[0] else 'Unknown'
                         
-                        if 'DONE' in str(status).upper() or 'completed' in str(status).lower():
+                        if 'DONE' in status.upper() or 'completed' in status.lower():
                             st.success(f"""
                             ✅ **Evaluation job completed!**
                             
@@ -179,7 +179,7 @@ The job will read this config from `DRI_EVAL_RUNS` table.
                             **View results in Snowsight:**
                             1. Go to **AI & ML > Evaluations**
                             2. Click on **DRI_INTELLIGENCE_AGENT**
-                            3. Find run: **{run_name}** (or Evaluation_Test if using default spec)
+                            3. Find run: **{run_name}**
                             """)
                             
                             st.markdown("#### Job Logs")
@@ -188,7 +188,8 @@ The job will read this config from `DRI_EVAL_RUNS` table.
                                     SELECT SYSTEM$GET_SERVICE_LOGS('AGEDCARE.AGEDCARE.{job_name}', 0, 'dri-evaluation', 100)
                                 """, session)
                                 if logs:
-                                    st.code(logs[0][list(logs[0].keys())[0]], language="text")
+                                    log_val = list(logs[0].values())[0] if hasattr(logs[0], 'values') else str(logs[0])
+                                    st.code(log_val, language="text")
                             except Exception as log_err:
                                 st.warning(f"Could not retrieve logs: {log_err}")
                         else:
