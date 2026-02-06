@@ -37,9 +37,9 @@ This job properly integrates with **Snowflake AI Observability** so results appe
 
 The evaluation follows the official Snowflake AI Observability pattern:
 
-1. **TruSession**: Creates connection to Snowflake AI Observability via SnowflakeConnector
+1. **SnowflakeConnector**: Creates connection to Snowflake AI Observability
 2. **TruApp**: Registers the DRIAnalyzer application with proper instrumentation
-3. **RunConfig**: Specifies dataset mapping (RECORD_ROOT.INPUT, INPUT_ID)
+3. **RunConfig**: Specifies dataset mapping (`input` key maps to `input_query` column)
 4. **run.start()**: Executes analysis for each resident, capturing traces
 5. **run.compute_metrics()**: Triggers LLM-as-judge evaluation for:
    - Groundedness (is the response supported by context?)
@@ -63,22 +63,32 @@ This grants the required AI Observability privileges:
 
 ### 2. Build and Push Docker Image
 
+**CRITICAL: Build for linux/amd64 architecture (required for SPCS)**
+
 ```bash
 cd dri-intelligence/evaluation_job
 
-# Login to Snowflake registry
+# Login to Snowflake registry using snow CLI
 snow spcs image-registry login --connection DEMO_SWEINGARTNER
 
-# Build for linux/amd64 (required for SPCS)
-docker build --platform linux/amd64 -t dri-evaluation:latest .
+# Build for linux/amd64 (REQUIRED - SPCS only supports amd64)
+docker buildx build --platform linux/amd64 -t dri-evaluation:latest --load .
 
 # Get registry URL
-snow sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA AGEDCARE.AGEDCARE" -c DEMO_SWEINGARTNER
+snow spcs image-registry url --connection DEMO_SWEINGARTNER
+# Example output: sfseapac-demo-sweingartner.registry.snowflakecomputing.com
 
-# Tag and push (replace <registry> with your account's registry URL)
-docker tag dri-evaluation:latest <registry>/AGEDCARE/AGEDCARE/DRI_IMAGES/dri-evaluation:latest
-docker push <registry>/AGEDCARE/AGEDCARE/DRI_IMAGES/dri-evaluation:latest
+# Tag for your registry (replace <registry> with your URL)
+docker tag dri-evaluation:latest <registry>/agedcare/agedcare/dri_images/dri-evaluation:latest
+
+# Push (this will take 30-60 minutes for the ~1.5GB image)
+docker push <registry>/agedcare/agedcare/dri_images/dri-evaluation:latest
 ```
+
+**Common Issues:**
+- If push hangs, ensure Docker Desktop is running and logged in
+- If you see "SPCS only supports image for amd64 architecture", rebuild with `--platform linux/amd64`
+- The large layer (~1.5GB) contains TruLens dependencies and takes time to push
 
 ### 3. Upload Job Spec to Stage
 
@@ -90,7 +100,7 @@ snow stage copy job-run-spec.yaml @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE -c DEMO_SWEI
 
 ### From Streamlit App
 
-The Quality Metrics page has a "Run Quality Evaluation" button that triggers this job.
+The Batch Testing page has a "Run Quality Evaluation" button that triggers this job.
 
 ### From SQL
 
@@ -109,12 +119,12 @@ QUERY_WAREHOUSE = COMPUTE_WH;
 
 ### With Custom Parameters
 
-The job accepts these arguments:
-- `--run-name`: Name for this evaluation run (auto-generated if not provided)
-- `--prompt-version`: Prompt version to evaluate (default: v1.0)
-- `--model`: LLM model to use (default: claude-sonnet-4-5)
-- `--sample-size`: Number of residents to evaluate (default: 10)
-- `--app-name`: Application name in AI Observability (default: DRI_INTELLIGENCE_AGENT)
+The job accepts these environment variables (set in job-run-spec.yaml):
+- `RUN_NAME`: Name for this evaluation run (auto-generated if not provided)
+- `PROMPT_VERSION`: Prompt version to evaluate (default: v1.0)
+- `MODEL`: LLM model to use (default: claude-sonnet-4-5)
+- `SAMPLE_SIZE`: Number of residents to evaluate (default: 5)
+- `TRULENS_OTEL_TRACING`: Set to "1" to enable tracing (required)
 
 ### Scheduled Evaluation (via Task)
 
@@ -148,19 +158,23 @@ Navigate to **AI & ML > Evaluations** to see:
 
 ### In Streamlit App (Secondary)
 
-Navigate to **Quality Metrics** page to see:
+Navigate to **Batch Testing** page to see:
 - Latest evaluation status
-- False positive rate trend
-- Evaluation history with per-resident details
+- Job execution logs
+- Run history
 
 ### Via SQL
 
 ```sql
--- View AI Observability data (requires AI_OBSERVABILITY_EVENTS_LOOKUP role)
--- This is the native AI Observability event table
-SELECT * FROM SNOWFLAKE.LOCAL.AI_OBSERVABILITY_EVENTS
-WHERE app_name = 'DRI_INTELLIGENCE_AGENT'
-ORDER BY timestamp DESC
+-- View AI Observability SPAN data (TruLens traces)
+SELECT 
+    TIMESTAMP,
+    RECORD_TYPE,
+    RECORD_ATTRIBUTES:"snow.ai.observability.object.name"::VARCHAR as OBJECT_NAME,
+    RECORD_ATTRIBUTES:"ai.observability.span_type"::VARCHAR as SPAN_TYPE
+FROM SNOWFLAKE.LOCAL.AI_OBSERVABILITY_EVENTS 
+WHERE RECORD_TYPE = 'SPAN'
+ORDER BY TIMESTAMP DESC
 LIMIT 100;
 
 -- View custom evaluation summary (always accessible)
@@ -173,7 +187,7 @@ ORDER BY CREATED_TIMESTAMP DESC LIMIT 10;
 ### Check Job Logs
 
 ```sql
-SELECT SYSTEM$GET_SERVICE_LOGS('AGEDCARE.AGEDCARE.DRI_EVAL_RUN', 0, 'dri-evaluation');
+SELECT SYSTEM$GET_SERVICE_LOGS('AGEDCARE.AGEDCARE.DRI_EVAL_RUN', 0, 'dri-evaluation', 500);
 ```
 
 ### Check Job Status
@@ -186,13 +200,15 @@ SELECT SYSTEM$GET_SERVICE_STATUS('AGEDCARE.AGEDCARE.DRI_EVAL_RUN');
 
 | Issue | Solution |
 |-------|----------|
+| "SPCS only supports image for amd64 architecture" | Rebuild with `docker buildx build --platform linux/amd64` |
 | "EXTERNAL AGENT privilege required" | Run `setup_evaluation_job.sql` to grant privileges |
 | "Application role not granted" | Grant `AI_OBSERVABILITY_EVENTS_LOOKUP` to your role |
-| Evaluations don't appear in Snowsight | Check that TruApp registration succeeded in logs |
+| Evaluations don't appear in Snowsight | Check SPAN records in `SNOWFLAKE.LOCAL.AI_OBSERVABILITY_EVENTS` |
 | Image not found | Verify docker push completed, check image path in spec |
-| Auth errors | Re-run `snow spcs image-registry login` |
+| Auth errors | Re-run `snow spcs image-registry login --connection <your_connection>` |
 | Out of memory | Increase `resources.limits.memory` in job spec |
-| Timeout | Reduce `--sample-size` or increase job timeout |
+| Timeout | Reduce `SAMPLE_SIZE` or increase job timeout |
+| "str object has no attribute 'get'" | Known evaluator warning - traces still recorded |
 
 ### Verify Privileges
 
@@ -206,12 +222,59 @@ SHOW GRANTS TO USER CURRENT_USER();
 -- - CREATE EXTERNAL AGENT on AGEDCARE.AGEDCARE schema
 ```
 
+### Verify Image Architecture
+
+```bash
+# Check the image is built for amd64
+docker inspect dri-evaluation:latest | grep Architecture
+# Should show: "Architecture": "amd64"
+```
+
+## TruLens Integration Details
+
+### Required Packages
+
+The requirements.txt includes separate TruLens packages per official Snowflake quickstart:
+
+```
+trulens-core>=2.1.2
+trulens-connectors-snowflake>=2.1.2
+trulens-providers-cortex>=2.1.2
+```
+
+### Key Implementation Patterns
+
+1. **TruApp Creation** - Use positional argument, not `test_app=`:
+```python
+tru_app = TruApp(
+    analyzer,  # positional, NOT test_app=analyzer
+    app_name=app_name,
+    app_version=app_version,
+    connector=connector
+)
+```
+
+2. **Dataset Spec Mapping** - Use lowercase keys:
+```python
+run_config = RunConfig(
+    dataset_spec={
+        "input": "input_query",  # NOT "RECORD_ROOT.INPUT"
+    },
+    ...
+)
+```
+
+3. **Run Type Annotation**:
+```python
+run: Run = tru_app.add_run(run_config=run_config)
+```
+
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `Dockerfile` | Container image definition |
-| `requirements.txt` | Python dependencies (includes TruLens) |
+| `requirements.txt` | Python dependencies (includes TruLens packages) |
 | `evaluate_dri.py` | Main evaluation script with TruApp pattern |
 | `entrypoint.sh` | Container entry point |
 | `job-spec.yaml` | SPCS job specification (persistent service) |
@@ -220,12 +283,19 @@ SHOW GRANTS TO USER CURRENT_USER();
 
 ## Why a Separate Container?
 
-The TruLens packages (`trulens-core`, `trulens-connectors-snowflake`, `trulens-apps-custom`) have heavy dependencies (~500MB total). These exceed the package resolution timeout in the standard Streamlit container runtime.
+The TruLens packages (`trulens-core`, `trulens-connectors-snowflake`, `trulens-providers-cortex`) have heavy dependencies (~1.5GB total). These exceed the package resolution timeout in the standard Streamlit container runtime.
 
 Benefits of dedicated SPCS Job container:
-- ✅ Full PyPI access (any package)
-- ✅ Longer timeouts for ML workloads
-- ✅ Results integrate with Snowsight AI Observability UI
-- ✅ Can be scheduled via Snowflake Tasks
-- ✅ Reusable by other Streamlit apps in your account
-- ✅ Callable from any app via `EXECUTE JOB SERVICE`
+- Full PyPI access (any package)
+- Longer timeouts for ML workloads
+- Results integrate with Snowsight AI Observability UI
+- Can be scheduled via Snowflake Tasks
+- Reusable by other Streamlit apps in your account
+- Callable from any app via `EXECUTE JOB SERVICE`
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | 2026-02-05 | Initial implementation |
+| 1.1 | 2026-02-06 | Fixed TruApp pattern, dataset_spec mapping, amd64 build |

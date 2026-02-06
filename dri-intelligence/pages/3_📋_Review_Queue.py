@@ -1,3 +1,14 @@
+"""DRI Intelligence - Review Queue
+
+Approval workflow for DRI changes:
+- View pending changes with current vs proposed scores
+- Approve or reject individual changes
+- Add reviewer notes
+- Bulk approve high-confidence items
+
+Data flows to DRI_DEFICIT_STATUS after approval.
+"""
+
 import streamlit as st
 import json
 import sys

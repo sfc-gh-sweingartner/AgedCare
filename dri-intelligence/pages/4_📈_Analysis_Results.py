@@ -1,3 +1,14 @@
+"""DRI Intelligence - Analysis Results
+
+Audit trail and detailed results view:
+- Browse historical LLM analysis runs
+- View raw JSON responses
+- See detected indicators with evidence
+- Filter by resident, date, model
+
+Data source: DRI_LLM_ANALYSIS table
+"""
+
 import streamlit as st
 import json
 import sys

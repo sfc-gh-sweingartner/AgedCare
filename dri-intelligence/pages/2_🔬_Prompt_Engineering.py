@@ -1,3 +1,16 @@
+"""DRI Intelligence - Prompt Engineering
+
+Interactive page for testing and tuning LLM prompts:
+- Select resident and client configuration
+- Choose model (Claude 4.5, etc.) and prompt version
+- Edit prompts with variable placeholders
+- Run analysis and view JSON results
+- Save new prompt versions
+
+Uses Snowflake Cortex Complete for LLM inference.
+Supports adaptive token sizing based on context length.
+"""
+
 import streamlit as st
 import json
 import sys

@@ -1,3 +1,22 @@
+"""DRI Intelligence - Batch Testing / AI Observability
+
+Run batch evaluations using Snowflake AI Observability:
+- Select client and sample size
+- Triggers SPCS evaluation job container
+- Job uses TruLens SDK for tracing and metrics
+- Results appear in Snowsight > AI & ML > Evaluations
+
+Deployment:
+- Evaluation job runs in separate SPCS container
+- Requires docker build with --platform linux/amd64
+- See evaluation_job/README.md for setup
+
+TruLens Integration (v2.1.2+):
+- TruApp with positional app argument
+- Dataset spec uses lowercase keys ("input" not "RECORD_ROOT.INPUT")
+- Run type annotated as Run class
+"""
+
 import streamlit as st
 import json
 import sys

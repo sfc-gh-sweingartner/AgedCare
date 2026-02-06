@@ -3,7 +3,7 @@
 ## Document Information
 | Field | Value |
 |-------|-------|
-| Version | 1.4 |
+| Version | 1.6 |
 | Created | 2026-01-28 |
 | Status | Approved |
 | Prerequisite | Functional Design v1.3 (Approved) |
@@ -1231,14 +1231,43 @@ dependencies = [
 
 **SPCS Evaluation Job Container (requirements.txt):**
 ```
-streamlit>=1.28.0
 snowflake-connector-python[pandas]>=3.0.0
 snowflake-snowpark-python>=1.0.0
+snowflake-ml-python>=1.5.0
 pandas>=2.0.0
-trulens-core>=1.0.0
-trulens-connectors-snowflake>=1.0.0
-trulens-providers-cortex>=1.0.0
-backports.tarfile>=1.0.0
+
+# TruLens packages for Snowflake AI Observability
+# Per official quickstart: https://www.snowflake.com/en/developers/guides/getting-started-with-ai-observability/
+trulens-core>=2.1.2
+trulens-connectors-snowflake>=2.1.2
+trulens-providers-cortex>=2.1.2
+```
+
+### 8.3 Docker Build for SPCS
+
+**CRITICAL:** SPCS only supports `linux/amd64` architecture. Always build with:
+
+```bash
+docker buildx build --platform linux/amd64 -t dri-evaluation:latest --load .
+```
+
+Do NOT use standard `docker build` on Apple Silicon Macs - the resulting arm64 image will fail to run on SPCS.
+
+### 8.4 SPCS Image Registry
+
+Use the Snowflake CLI for registry authentication:
+
+```bash
+# Login to registry
+snow spcs image-registry login --connection <connection_name>
+
+# Get registry URL
+snow spcs image-registry url --connection <connection_name>
+# Example: sfseapac-demo-sweingartner.registry.snowflakecomputing.com
+
+# Tag and push
+docker tag dri-evaluation:latest <registry>/agedcare/agedcare/dri_images/dri-evaluation:latest
+docker push <registry>/agedcare/agedcare/dri_images/dri-evaluation:latest
 ```
 
 ### 8.3 SPCS Service Definition
@@ -1614,9 +1643,9 @@ The warehouse `MYWH` is used ONLY for:
 
 ---
 
-*Document Version: 1.5*  
+*Document Version: 1.6*  
 *Created: 2026-01-28*  
-*Updated: 2026-02-05*  
+*Updated: 2026-02-06*  
 *Status: Approved*
 
 ### Change Log
@@ -1628,3 +1657,4 @@ The warehouse `MYWH` is used ONLY for:
 | 1.3 | 2026-02-03 | AI Observability integration: Added DRI_EVALUATION_METRICS, DRI_EVALUATION_DETAIL, DRI_GROUND_TRUTH tables (Section 2.4), added ai_observability.py module, replaced batch_testing.py with quality_metrics.py, added TruLens packages to requirements.txt, marked Claude vs Regex as demo-only |
 | 1.4 | 2026-02-05 | Architecture update: TruLens moved to separate SPCS job container (DRI_EVALUATION_JOB), Streamlit app no longer requires TruLens packages, evaluations from UI run synchronously without TruLens, updated pyproject.toml dependencies, clarified quality metrics page shows execution metrics (not TruLens scores) unless full TruLens integration deployed |
 | 1.5 | 2026-02-05 | UI improvements: Resident dropdown shows facility name, auto-select client config based on resident, Run Quality Evaluation button triggers SPCS job via EXECUTE JOB SERVICE, sample size selector added |
+| 1.6 | 2026-02-06 | AI Observability integration fixed: TruLens SDK patterns corrected (TruApp constructor uses positional arg, dataset_spec uses lowercase keys), Docker build requires `--platform linux/amd64` for SPCS, evaluation results now appear in Snowsight AI & ML > Evaluations, updated requirements.txt to use trulens-core>=2.1.2 |

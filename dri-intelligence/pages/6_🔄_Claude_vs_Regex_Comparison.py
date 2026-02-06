@@ -1,3 +1,16 @@
+"""DRI Intelligence - Claude vs Regex Comparison
+
+*** DEMO ONLY - TO BE REMOVED AFTER DEMO ***
+
+Side-by-side comparison showing Claude LLM accuracy
+improvement over legacy regex-based detection.
+- Compare DRI scores between methods
+- Show false positive reduction
+- Detailed indicator breakdown
+
+This page exists to demonstrate value to stakeholders.
+"""
+
 import streamlit as st
 import json
 import re

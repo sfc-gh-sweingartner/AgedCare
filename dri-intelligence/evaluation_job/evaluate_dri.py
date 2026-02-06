@@ -8,6 +8,25 @@ IMPORTANT: This module uses the official TruLens SDK pattern to register
 applications and runs with Snowflake AI Observability. Results appear in
 Snowsight > AI & ML > Evaluations.
 
+KEY IMPLEMENTATION NOTES (v1.1 - 2026-02-06):
+1. TruApp constructor uses POSITIONAL argument for the app:
+   - Correct: TruApp(analyzer, app_name=..., connector=...)
+   - Wrong: TruApp(test_app=analyzer, ...)
+
+2. Dataset spec uses LOWERCASE keys:
+   - Correct: dataset_spec={"input": "input_query"}
+   - Wrong: dataset_spec={"RECORD_ROOT.INPUT": "input_query"}
+
+3. Run type annotation:
+   - Correct: run: Run = tru_app.add_run(run_config=...)
+
+4. Required packages (separate installs):
+   - trulens-core>=2.1.2
+   - trulens-connectors-snowflake>=2.1.2
+   - trulens-providers-cortex>=2.1.2
+
+5. Docker build MUST use --platform linux/amd64 for SPCS
+
 Usage:
     python evaluate_dri.py --run-name "MyEval" --prompt-version "v1.0" --model "claude-sonnet-4-5" --sample-size 10
 """
@@ -24,12 +43,11 @@ from typing import Optional, Dict, List, Any
 import pandas as pd
 from snowflake.snowpark import Session
 
-from trulens.core import TruSession
 from trulens.core.otel.instrument import instrument
 from trulens.otel.semconv.trace import SpanAttributes
 from trulens.connectors.snowflake import SnowflakeConnector
 from trulens.apps.app import TruApp
-from trulens.core.run import RunConfig
+from trulens.core.run import Run, RunConfig
 
 
 class DRIAnalyzer:
@@ -244,9 +262,8 @@ def run_evaluation(
     print(f"  Model: {model}")
     print(f"  Sample size: {sample_size}")
     
-    print("\n[1/6] Creating TruLens session...")
+    print("\n[1/6] Creating Snowflake connector...")
     connector = SnowflakeConnector(snowpark_session=session)
-    tru_session = TruSession(connector=connector)
     
     print("[2/6] Creating DRI Analyzer application...")
     analyzer = DRIAnalyzer(session, prompt_version, model)
@@ -254,12 +271,13 @@ def run_evaluation(
     print("[3/6] Registering application with Snowflake AI Observability...")
     app_version = f"{prompt_version}_{model}"
     
+    # Register application following official TruLens pattern
+    # This creates an EXTERNAL AGENT in Snowflake and tracks runs
     tru_app = TruApp(
-        test_app=analyzer,
+        analyzer,  # The application instance
         app_name=app_name,
         app_version=app_version,
-        connector=connector,
-        main_method=analyzer.analyze_resident
+        connector=connector
     )
     print(f"  Registered: {app_name} v{app_version}")
     
@@ -275,13 +293,11 @@ def run_evaluation(
         source_type="DATAFRAME",
         dataset_name="DRI_ACTIVE_RESIDENTS",
         dataset_spec={
-            "RECORD_ROOT.INPUT": "input_query",
-            "RECORD_ROOT.INPUT_ID": "input_id",
+            "input": "input_query",
         },
-        llm_judge_name="llama3.1-70b"
     )
     
-    run = tru_app.add_run(run_config=run_config)
+    run: Run = tru_app.add_run(run_config=run_config)
     print(f"  Run created: {run_name}")
     
     print("  Starting invocation (this may take several minutes)...")

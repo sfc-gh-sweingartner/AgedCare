@@ -1,3 +1,15 @@
+"""DRI Intelligence - Configuration
+
+Client configuration management (5 tabs):
+1. Client Config - View/edit client settings
+2. Form Mappings - Map source fields to indicators
+3. Indicator Overrides - Client-specific thresholds
+4. RAG Indicators - Browse all 33 DRI indicators
+5. Processing Settings - Production model, prompt, batch schedule
+
+Supports multi-tenant configuration per client.
+"""
+
 import streamlit as st
 import json
 import sys

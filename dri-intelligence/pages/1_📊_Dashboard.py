@@ -1,3 +1,18 @@
+"""DRI Intelligence - Dashboard
+
+Overview page showing key metrics:
+- Total residents being monitored
+- Pending/Approved/Rejected review counts
+- Active prompt version info
+- Client configuration status
+
+Data sources:
+- ACTIVE_RESIDENT_NOTES: Resident count
+- DRI_REVIEW_QUEUE: Review status counts
+- DRI_PROMPT_VERSIONS: Active prompt info
+- DRI_CLIENT_CONFIG: Client settings
+"""
+
 import streamlit as st
 import sys
 sys.path.insert(0, '/Users/sweingartner/CoCo/AgedCare/dri-intelligence')
