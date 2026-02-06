@@ -12,11 +12,11 @@ from src.connection_helper import get_snowflake_session, execute_query_df
 page = st.navigation([
     st.Page("app_pages/dashboard.py", title="Dashboard", icon=":material/dashboard:", default=True),
     st.Page("app_pages/prompt_engineering.py", title="Prompt engineering", icon=":material/science:"),
+    st.Page("app_pages/batch_testing.py", title="Batch testing", icon=":material/labs:"),
     st.Page("app_pages/review_queue.py", title="Review queue", icon=":material/checklist:"),
     st.Page("app_pages/analysis_results.py", title="Analysis results", icon=":material/analytics:"),
     st.Page("app_pages/configuration.py", title="Configuration", icon=":material/settings:"),
     st.Page("app_pages/comparison.py", title="Claude vs Regex", icon=":material/compare_arrows:"),
-    st.Page("app_pages/quality_metrics.py", title="Quality metrics", icon=":material/monitoring:"),
 ], position="sidebar")
 
 st.title(f"{page.icon} {page.title}")
