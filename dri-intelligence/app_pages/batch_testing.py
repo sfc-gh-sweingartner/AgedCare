@@ -269,30 +269,30 @@ The job will read this config from `DRI_EVAL_RUNS` table.
         st.subheader("Quality Metrics Trend")
         
         metrics_trend = execute_query_df("""
-            SELECT 
-                m.RUN_NAME,
-                m.TIMESTAMP as CREATED_TIMESTAMP,
-                ROUND(m.GROUNDEDNESS * 100, 1) as GROUNDEDNESS_PCT,
-                ROUND(m.CONTEXT_RELEVANCE * 100, 1) as CONTEXT_RELEVANCE_PCT,
-                ROUND(m.ANSWER_RELEVANCE * 100, 1) as ANSWER_RELEVANCE_PCT,
-                ROUND(m.COHERENCE * 100, 1) as COHERENCE_PCT,
-                m.RECORD_COUNT
-            FROM (
+            WITH eval_metrics AS (
                 SELECT 
                     RECORD_ATTRIBUTES:"snow.ai.observability.run.name"::VARCHAR as RUN_NAME,
-                    MIN(TIMESTAMP) as TIMESTAMP,
-                    AVG(RECORD_ATTRIBUTES:"groundedness"::FLOAT) as GROUNDEDNESS,
-                    AVG(RECORD_ATTRIBUTES:"context_relevance"::FLOAT) as CONTEXT_RELEVANCE,
-                    AVG(RECORD_ATTRIBUTES:"answer_relevance"::FLOAT) as ANSWER_RELEVANCE,
-                    AVG(RECORD_ATTRIBUTES:"coherence"::FLOAT) as COHERENCE,
-                    COUNT(*) as RECORD_COUNT
+                    TIMESTAMP,
+                    RECORD_ATTRIBUTES:"ai.observability.eval.metric_name"::VARCHAR as METRIC_NAME,
+                    RECORD_ATTRIBUTES:"ai.observability.eval_root.score"::FLOAT as SCORE
                 FROM SNOWFLAKE.LOCAL.AI_OBSERVABILITY_EVENTS
                 WHERE RECORD_TYPE = 'SPAN'
                   AND RECORD_ATTRIBUTES:"snow.ai.observability.object.name"::VARCHAR = 'DRI_INTELLIGENCE_AGENT'
-                  AND RECORD_ATTRIBUTES:"groundedness" IS NOT NULL
-                GROUP BY 1
-            ) m
-            ORDER BY m.TIMESTAMP
+                  AND RECORD_ATTRIBUTES:"ai.observability.eval.metric_name" IS NOT NULL
+                  AND RECORD_ATTRIBUTES:"ai.observability.eval_root.score" IS NOT NULL
+            )
+            SELECT 
+                RUN_NAME,
+                MIN(TIMESTAMP) as CREATED_TIMESTAMP,
+                ROUND(AVG(CASE WHEN METRIC_NAME = 'groundedness' THEN SCORE END) * 100, 1) as GROUNDEDNESS_PCT,
+                ROUND(AVG(CASE WHEN METRIC_NAME = 'context_relevance' THEN SCORE END) * 100, 1) as CONTEXT_RELEVANCE_PCT,
+                ROUND(AVG(CASE WHEN METRIC_NAME = 'answer_relevance' THEN SCORE END) * 100, 1) as ANSWER_RELEVANCE_PCT,
+                ROUND(AVG(CASE WHEN METRIC_NAME = 'coherence' THEN SCORE END) * 100, 1) as COHERENCE_PCT,
+                COUNT(DISTINCT METRIC_NAME) as METRICS_COUNT
+            FROM eval_metrics
+            GROUP BY RUN_NAME
+            HAVING GROUNDEDNESS_PCT IS NOT NULL
+            ORDER BY CREATED_TIMESTAMP
         """, session)
         
         if metrics_trend is not None and len(metrics_trend) > 0:
@@ -346,7 +346,7 @@ The job will read this config from `DRI_EVAL_RUNS` table.
             
             with tab_history:
                 st.dataframe(
-                    metrics_trend[['RUN_NAME', 'CREATED_TIMESTAMP', 'GROUNDEDNESS_PCT', 'CONTEXT_RELEVANCE_PCT', 'ANSWER_RELEVANCE_PCT', 'COHERENCE_PCT', 'RECORD_COUNT']].rename(
+                    metrics_trend[['RUN_NAME', 'CREATED_TIMESTAMP', 'GROUNDEDNESS_PCT', 'CONTEXT_RELEVANCE_PCT', 'ANSWER_RELEVANCE_PCT', 'COHERENCE_PCT', 'METRICS_COUNT']].rename(
                         columns={
                             'RUN_NAME': 'Run Name',
                             'CREATED_TIMESTAMP': 'Timestamp',
@@ -354,7 +354,7 @@ The job will read this config from `DRI_EVAL_RUNS` table.
                             'CONTEXT_RELEVANCE_PCT': 'Context Rel %',
                             'ANSWER_RELEVANCE_PCT': 'Answer Rel %',
                             'COHERENCE_PCT': 'Coherence %',
-                            'RECORD_COUNT': 'Records'
+                            'METRICS_COUNT': 'Metrics'
                         }
                     ),
                     use_container_width=True
