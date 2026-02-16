@@ -156,10 +156,23 @@ class DRIAnalyzer:
         if '"choices"' in response:
             try:
                 wrapper = json.loads(response)
-                if 'choices' in wrapper:
-                    response = wrapper['choices'][0].get('messages', response)
-            except:
-                pass
+                if 'choices' in wrapper and isinstance(wrapper['choices'], list) and len(wrapper['choices']) > 0:
+                    choice = wrapper['choices'][0]
+                    if isinstance(choice, dict):
+                        msg = choice.get('message', {})
+                        if isinstance(msg, dict):
+                            response = msg.get('content', response)
+                        elif isinstance(msg, str):
+                            response = msg
+                        else:
+                            response = choice.get('messages', str(response))
+                    elif isinstance(choice, str):
+                        response = choice
+            except Exception as e:
+                print(f"  Warning: Error parsing LLM response: {e}")
+        
+        if not isinstance(response, str):
+            response = str(response)
         
         return response
     
@@ -306,7 +319,23 @@ def run_evaluation(
     invocation_time = time.time() - start_time
     print(f"  Invocation completed in {invocation_time:.1f}s")
     
-    print("[6/6] Computing evaluation metrics...")
+    print("\n  Waiting for ingestion to complete before computing metrics...")
+    ingestion_wait = 0
+    max_ingestion_wait = 120
+    while ingestion_wait < max_ingestion_wait:
+        status = run.get_status()
+        status_str = str(status)
+        print(f"    Status: {status_str} ({ingestion_wait}s)")
+        if 'INVOCATION_COMPLETED' in status_str or 'PARTIALLY_COMPLETED' in status_str:
+            print("  Ingestion complete, proceeding to metrics computation")
+            break
+        elif 'CANCELLED' in status_str or 'FAILED' in status_str:
+            print(f"  Run failed during invocation: {status_str}")
+            break
+        time.sleep(10)
+        ingestion_wait += 10
+    
+    print("\n[6/6] Computing evaluation metrics...")
     metrics_to_compute = [
         "groundedness",
         "answer_relevance",
@@ -315,22 +344,26 @@ def run_evaluation(
     ]
     print(f"  Metrics: {', '.join(metrics_to_compute)}")
     
-    run.compute_metrics(metrics=metrics_to_compute)
-    print("  Metric computation started (async)")
+    try:
+        result = run.compute_metrics(metrics=metrics_to_compute)
+        print(f"  Metric computation triggered: {result}")
+    except Exception as e:
+        print(f"  Warning: Error triggering metrics: {e}")
     
     print("\nWaiting for metric computation to complete...")
-    max_wait = 300
+    max_wait = 600
     wait_interval = 10
     elapsed = 0
     
     while elapsed < max_wait:
         status = run.get_status()
-        print(f"  Status: {status} ({elapsed}s elapsed)")
+        status_str = str(status)
+        print(f"  Status: {status_str} ({elapsed}s elapsed)")
         
-        if status in ['COMPLETED', 'PARTIALLY_COMPLETED']:
+        if 'COMPLETED' in status_str or 'METRICS_COMPUTED' in status_str:
             break
-        elif status in ['CANCELLED']:
-            print("  Run was cancelled!")
+        elif 'CANCELLED' in status_str or 'FAILED' in status_str:
+            print(f"  Run ended with: {status_str}")
             break
             
         time.sleep(wait_interval)

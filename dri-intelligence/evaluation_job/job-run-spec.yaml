@@ -1,13 +1,12 @@
 spec:
   containers:
   - name: dri-evaluation
-    image: /AGEDCARE/AGEDCARE/DRI_IMAGES/dri-evaluation:latest
+    image: /AGEDCARE/AGEDCARE/DRI_IMAGES/dri-evaluation:v2.2
     env:
       SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
-      RUN_NAME: "Evaluation_Test"
       PROMPT_VERSION: "v1.0"
       MODEL: "claude-sonnet-4-5"
-      SAMPLE_SIZE: "5"
+      SAMPLE_SIZE: "10"
       TRULENS_OTEL_TRACING: "1"
     resources:
       requests:

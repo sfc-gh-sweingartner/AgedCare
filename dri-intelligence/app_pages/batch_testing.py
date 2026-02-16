@@ -39,6 +39,28 @@ if session:
         - Results appear in **Snowsight > AI & ML > Evaluations > DRI_INTELLIGENCE_AGENT**
         """)
         
+        with st.expander("Understanding Evaluation Metrics", expanded=False, icon=":material/help:"):
+            st.markdown("""
+### LLM-as-Judge Evaluation Metrics
+
+These metrics are computed using **LLM-as-Judge** methodology - a separate LLM evaluates the quality of the AI responses. 
+This is NOT a factual accuracy check against ground truth data.
+
+| Metric | What It Measures | How It's Calculated | Target |
+|--------|------------------|---------------------|--------|
+| **Answer Relevance** | Is the response relevant to the question asked? | LLM judges if the response addresses the original query appropriately | >85% |
+| **Coherence** | Is the response logically consistent and well-structured? | LLM evaluates internal logical consistency of the response | >85% |
+| **Context Relevance** | Is the retrieved RAG context relevant to the query? | LLM judges if the retrieved documents/data are useful for answering | >85% |
+| **Groundedness** | Is the response supported by the retrieved context? | LLM checks if claims in the response are backed by the provided context | >90% |
+
+### Important Notes
+
+- **High scores ≠ Factual correctness**: A response can score 100% and still be factually wrong if the retrieved context itself contains errors
+- **Groundedness**: Measures whether the AI "stayed in bounds" - didn't hallucinate beyond what the data shows
+- **These are quality signals, not accuracy guarantees**: Use alongside human review for critical decisions
+- **View detailed traces**: Go to **Snowsight > AI & ML > Evaluations** to see per-record LLM judge explanations
+            """)
+        
         st.info("💡 The evaluation job runs in a separate container. Make sure the Docker image has been deployed (see evaluation_job/README.md)")
         
         col_eval1, col_eval2 = st.columns(2)
@@ -243,21 +265,162 @@ The job will read this config from `DRI_EVAL_RUNS` table.
                 st.error(f"Could not check status: {e}")
         
         st.markdown("---")
-        st.markdown("""
-        ### How It Works
         
-        1. **EXECUTE JOB SERVICE** runs the TruLens evaluation container
-        2. The container connects to Snowflake and registers with AI Observability
-        3. Each resident analysis is traced with:
-           - **RETRIEVAL** spans (context gathering)
-           - **GENERATION** spans (LLM inference)
-           - **RECORD_ROOT** spans (full request/response)
-        4. Evaluation metrics (groundedness, relevance) are computed
-        5. Results appear in **Snowsight > AI & ML > Evaluations**
+        st.subheader("Quality Metrics Trend")
         
-        ⚠️ **Note:** The run name in the spec file (`job-run-spec.yaml`) is used unless you update 
-        the spec or create a dynamic job specification. Current default is "Evaluation_Test".
-        """)
+        metrics_trend = execute_query_df("""
+            SELECT 
+                m.RUN_NAME,
+                m.TIMESTAMP as CREATED_TIMESTAMP,
+                ROUND(m.GROUNDEDNESS * 100, 1) as GROUNDEDNESS_PCT,
+                ROUND(m.CONTEXT_RELEVANCE * 100, 1) as CONTEXT_RELEVANCE_PCT,
+                ROUND(m.ANSWER_RELEVANCE * 100, 1) as ANSWER_RELEVANCE_PCT,
+                ROUND(m.COHERENCE * 100, 1) as COHERENCE_PCT,
+                m.RECORD_COUNT
+            FROM (
+                SELECT 
+                    RECORD_ATTRIBUTES:"snow.ai.observability.run.name"::VARCHAR as RUN_NAME,
+                    MIN(TIMESTAMP) as TIMESTAMP,
+                    AVG(RECORD_ATTRIBUTES:"groundedness"::FLOAT) as GROUNDEDNESS,
+                    AVG(RECORD_ATTRIBUTES:"context_relevance"::FLOAT) as CONTEXT_RELEVANCE,
+                    AVG(RECORD_ATTRIBUTES:"answer_relevance"::FLOAT) as ANSWER_RELEVANCE,
+                    AVG(RECORD_ATTRIBUTES:"coherence"::FLOAT) as COHERENCE,
+                    COUNT(*) as RECORD_COUNT
+                FROM SNOWFLAKE.LOCAL.AI_OBSERVABILITY_EVENTS
+                WHERE RECORD_TYPE = 'SPAN'
+                  AND RECORD_ATTRIBUTES:"snow.ai.observability.object.name"::VARCHAR = 'DRI_INTELLIGENCE_AGENT'
+                  AND RECORD_ATTRIBUTES:"groundedness" IS NOT NULL
+                GROUP BY 1
+            ) m
+            ORDER BY m.TIMESTAMP
+        """, session)
+        
+        if metrics_trend is not None and len(metrics_trend) > 0:
+            tab_all, tab_quality, tab_history = st.tabs(["All Metrics", "Quality Scores", "Evaluation History"])
+            
+            with tab_all:
+                chart_data = metrics_trend[['CREATED_TIMESTAMP', 'GROUNDEDNESS_PCT', 'CONTEXT_RELEVANCE_PCT', 'ANSWER_RELEVANCE_PCT', 'COHERENCE_PCT']].copy()
+                chart_data = chart_data.set_index('CREATED_TIMESTAMP')
+                chart_data.columns = ['Groundedness %', 'Context Relevance %', 'Answer Relevance %', 'Coherence %']
+                st.line_chart(chart_data, use_container_width=True)
+                
+                with st.container(border=True):
+                    cols = st.columns(4)
+                    latest = metrics_trend.iloc[-1]
+                    with cols[0]:
+                        g = latest['GROUNDEDNESS_PCT'] or 0
+                        st.metric("Latest Groundedness", f"{g}%")
+                    with cols[1]:
+                        c = latest['CONTEXT_RELEVANCE_PCT'] or 0
+                        st.metric("Latest Context Relevance", f"{c}%")
+                    with cols[2]:
+                        a = latest['ANSWER_RELEVANCE_PCT'] or 0
+                        st.metric("Latest Answer Relevance", f"{a}%")
+                    with cols[3]:
+                        co = latest['COHERENCE_PCT'] or 0
+                        st.metric("Latest Coherence", f"{co}%")
+            
+            with tab_quality:
+                st.markdown("**Quality score targets:**")
+                st.caption("Groundedness: >90% | Context Relevance: >85% | Answer Relevance: >85% | Coherence: >85%")
+                
+                for _, row in metrics_trend.iterrows():
+                    with st.expander(f"{row['RUN_NAME']} - {row['CREATED_TIMESTAMP']}"):
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            g = row['GROUNDEDNESS_PCT'] or 0
+                            delta = "Good" if g >= 90 else "Below target"
+                            st.metric("Groundedness", f"{g}%", delta=delta)
+                        with col2:
+                            c = row['CONTEXT_RELEVANCE_PCT'] or 0
+                            delta = "Good" if c >= 85 else "Below target"
+                            st.metric("Context Rel.", f"{c}%", delta=delta)
+                        with col3:
+                            a = row['ANSWER_RELEVANCE_PCT'] or 0
+                            delta = "Good" if a >= 85 else "Below target"
+                            st.metric("Answer Rel.", f"{a}%", delta=delta)
+                        with col4:
+                            co = row['COHERENCE_PCT'] or 0
+                            delta = "Good" if co >= 85 else "Below target"
+                            st.metric("Coherence", f"{co}%", delta=delta)
+            
+            with tab_history:
+                st.dataframe(
+                    metrics_trend[['RUN_NAME', 'CREATED_TIMESTAMP', 'GROUNDEDNESS_PCT', 'CONTEXT_RELEVANCE_PCT', 'ANSWER_RELEVANCE_PCT', 'COHERENCE_PCT', 'RECORD_COUNT']].rename(
+                        columns={
+                            'RUN_NAME': 'Run Name',
+                            'CREATED_TIMESTAMP': 'Timestamp',
+                            'GROUNDEDNESS_PCT': 'Groundedness %',
+                            'CONTEXT_RELEVANCE_PCT': 'Context Rel %',
+                            'ANSWER_RELEVANCE_PCT': 'Answer Rel %',
+                            'COHERENCE_PCT': 'Coherence %',
+                            'RECORD_COUNT': 'Records'
+                        }
+                    ),
+                    use_container_width=True
+                )
+        else:
+            st.info("Run evaluations to see quality metrics trends over time.", icon=":material/info:")
+            
+            with st.container(border=True):
+                st.markdown("**What metrics will be shown:**")
+                st.markdown("""
+                - **Groundedness**: Is the response supported by the retrieved context?
+                - **Context Relevance**: Is the retrieved patient data relevant to the query?
+                - **Answer Relevance**: Does the response properly address the analysis task?
+                - **Coherence**: Is the response logically consistent?
+                """)
+        
+        st.markdown("---")
+        
+        st.subheader("View in Snowsight")
+        
+        with st.container(border=True):
+            st.markdown("""
+            **View detailed traces and evaluations in Snowsight:**
+            
+            Navigate to **AI & ML → Evaluations** to see:
+            - Individual trace analysis with inputs/outputs
+            - LLM judge explanations for each score
+            - Side-by-side comparison of evaluation runs
+            - Cost and latency breakdowns
+            """)
+            
+            st.link_button(
+                "Open Snowsight Evaluations",
+                "https://app.snowflake.com/sfseapac/demo_sweingartner/#/ai-ml/evaluations",
+                icon=":material/open_in_new:"
+            )
+        
+        st.markdown("---")
+        
+        with st.expander("How It Works", expanded=False, icon=":material/architecture:"):
+            st.markdown("""
+            ### Evaluation Architecture
+            
+            1. **EXECUTE JOB SERVICE** runs the TruLens evaluation container
+            2. The container connects to Snowflake and registers with AI Observability
+            3. Each resident analysis is traced with:
+               - **RETRIEVAL** spans (context gathering)
+               - **GENERATION** spans (LLM inference)
+               - **RECORD_ROOT** spans (full request/response)
+            4. Evaluation metrics (groundedness, relevance) are computed via `run.compute_metrics()`
+            5. Results appear in **Snowsight > AI & ML > Evaluations**
+            
+            ```
+            ┌─────────────────────┐     EXECUTE JOB SERVICE      ┌──────────────────────┐
+            │  This Streamlit App │ ─────────────────────────▶   │  SPCS Evaluation Job │
+            │  (Quality Metrics)  │                              │  (TruLens + Python)  │
+            └─────────────────────┘                              └──────────────────────┘
+                     │                                                      │
+                     │  SELECT FROM                                         │ Writes to
+                     ▼                                                      ▼
+            ┌─────────────────────────────────────────────────────────────────────────────┐
+            │                    Snowflake AI Observability Tables                        │
+            │                    (Traces, Evaluations, Metrics)                           │
+            └─────────────────────────────────────────────────────────────────────────────┘
+            ```
+            """)
     
     with tab2:
         st.markdown("""
