@@ -1,6 +1,6 @@
 [project]
 name = "dri-intelligence"
-version = "1.0.0"
+version = "1.7.0"
 description = "DRI Intelligence - AI-powered clinical analysis for aged care"
 requires-python = "==3.11.*"
 dependencies = [
@@ -11,8 +11,3 @@ dependencies = [
 
 [tool.uv]
 prerelease = "if-necessary-or-explicit"
-
-# TruLens dependencies for AI Observability (requires custom container due to heavy deps)
-# trulens-core>=2.1.2
-# trulens-connectors-snowflake>=2.1.2
-# trulens-providers-cortex>=2.1.2  # pulls in snowflake-ml-python, xgboost, scipy (~200MB)

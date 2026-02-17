@@ -1,435 +1,43 @@
-"""DRI Intelligence - Batch Testing / AI Observability
+"""DRI Intelligence - Batch Testing & Approval-Based Quality Metrics
 
-Two modes of operation:
+v1.7 Simplified Architecture:
+- Removed TruLens/AI Observability integration
+- Quality metrics derived from approval workflow (DRI_REVIEW_QUEUE)
+- Ground truth auto-harvested from approved/rejected decisions
+- SQL views provide real-time quality scoring
 
-1. QUALITY EVALUATION (AI Observability):
-   - Triggers SPCS evaluation job container with TruLens
-   - Results appear in Snowsight > AI & ML > Evaluations
-   - User specifies run name and sample size
-   - Uses EXECUTE JOB SERVICE to run evaluation_job container
-
-2. BATCH TEST (Review Workflow):
-   - Runs DRI analysis directly via Cortex Complete
-   - Stores results in DRI_LLM_ANALYSIS for review
-   - Creates entries in DRI_REVIEW_QUEUE for approval
-   - Does NOT integrate with Snowsight Evaluations
-
-See evaluation_job/README.md for SPCS container setup.
+Two main sections:
+1. BATCH TEST: Run DRI analysis on multiple residents, store for review
+2. QUALITY METRICS: Show approval rates by prompt version as the key quality signal
 """
 
 import streamlit as st
 import json
 import time
-from datetime import datetime, timedelta
+import uuid
+from datetime import datetime
 
 from src.connection_helper import get_snowflake_session, execute_query_df, execute_query
 
 session = get_snowflake_session()
 
 if session:
-    tab1, tab2 = st.tabs(["🔬 Quality Evaluation (AI Observability)", "📋 Batch Test (Review Workflow)"])
+    st.title("Batch Testing & Quality Metrics")
+    
+    tab1, tab2, tab3 = st.tabs([
+        "📋 Batch Test", 
+        "📊 Prompt Quality", 
+        "🎯 Ground Truth"
+    ])
     
     with tab1:
         st.markdown("""
-        ### Run Quality Evaluation
-        
-        This triggers the **SPCS TruLens evaluation job** which:
-        - Evaluates DRI analysis using AI Observability metrics
-        - Records traces with groundedness, context relevance, answer relevance
-        - Results appear in **Snowsight > AI & ML > Evaluations > DRI_INTELLIGENCE_AGENT**
-        """)
-        
-        with st.expander("Understanding Evaluation Metrics", expanded=False, icon=":material/help:"):
-            st.markdown("""
-### LLM-as-Judge Evaluation Metrics
-
-These metrics are computed using **LLM-as-Judge** methodology - a separate LLM evaluates the quality of the AI responses. 
-This is NOT a factual accuracy check against ground truth data.
-
-| Metric | What It Measures | How It's Calculated | Target |
-|--------|------------------|---------------------|--------|
-| **Answer Relevance** | Is the response relevant to the question asked? | LLM judges if the response addresses the original query appropriately | >85% |
-| **Coherence** | Is the response logically consistent and well-structured? | LLM evaluates internal logical consistency of the response | >85% |
-| **Context Relevance** | Is the retrieved RAG context relevant to the query? | LLM judges if the retrieved documents/data are useful for answering | >85% |
-| **Groundedness** | Is the response supported by the retrieved context? | LLM checks if claims in the response are backed by the provided context | >90% |
-
-### Important Notes
-
-- **High scores ≠ Factual correctness**: A response can score 100% and still be factually wrong if the retrieved context itself contains errors
-- **Groundedness**: Measures whether the AI "stayed in bounds" - didn't hallucinate beyond what the data shows
-- **These are quality signals, not accuracy guarantees**: Use alongside human review for critical decisions
-- **View detailed traces**: Go to **Snowsight > AI & ML > Evaluations** to see per-record LLM judge explanations
-            """)
-        
-        st.info("💡 The evaluation job runs in a separate container. Make sure the Docker image has been deployed (see evaluation_job/README.md)")
-        
-        col_eval1, col_eval2 = st.columns(2)
-        
-        with col_eval1:
-            default_run_name = f"Eval_{datetime.now().strftime('%Y%m%d_%H%M')}"
-            run_name = st.text_input(
-                "Evaluation Run Name",
-                value=default_run_name,
-                help="This name will appear in Snowsight Evaluations"
-            )
-            
-            sample_size = st.selectbox(
-                "Sample Size",
-                [5, 10, 20, 50, 100],
-                index=1,
-                help="Number of residents to evaluate"
-            )
-        
-        with col_eval2:
-            prompt_versions = execute_query_df("""
-                SELECT VERSION_NUMBER, DESCRIPTION, IS_ACTIVE
-                FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS
-                ORDER BY CREATED_TIMESTAMP DESC
-            """, session)
-            
-            if prompt_versions is not None and len(prompt_versions) > 0:
-                version_options = prompt_versions['VERSION_NUMBER'].tolist()
-                active_idx = 0
-                for i, row in prompt_versions.iterrows():
-                    if row['IS_ACTIVE']:
-                        active_idx = i
-                        break
-                prompt_version = st.selectbox(
-                    "Prompt Version",
-                    version_options,
-                    index=active_idx,
-                    help="Prompt version to use for evaluation"
-                )
-            else:
-                prompt_version = "v1.0"
-                st.warning("No prompt versions found, using v1.0")
-            
-            model = st.selectbox(
-                "Model",
-                ["claude-sonnet-4-5", "claude-3-5-sonnet", "claude-opus-4-5", "mistral-large2"],
-                index=0,
-                help="LLM model for analysis"
-            )
-        
-        st.markdown("---")
-        
-        existing_runs = execute_query_df("""
-            SELECT 
-                RECORD_ATTRIBUTES:"snow.ai.observability.run.name"::VARCHAR as RUN_NAME,
-                MIN(TIMESTAMP) as STARTED,
-                COUNT(*) as RECORD_COUNT
-            FROM SNOWFLAKE.LOCAL.AI_OBSERVABILITY_EVENTS
-            WHERE RECORD_TYPE = 'SPAN'
-              AND RECORD_ATTRIBUTES:"snow.ai.observability.object.name"::VARCHAR = 'DRI_INTELLIGENCE_AGENT'
-            GROUP BY 1
-            ORDER BY STARTED DESC
-            LIMIT 10
-        """, session)
-        
-        if existing_runs is not None and len(existing_runs) > 0:
-            with st.expander("📊 Recent Evaluation Runs", expanded=False):
-                st.dataframe(existing_runs, use_container_width=True)
-                st.caption("View full results in Snowsight > AI & ML > Evaluations")
-        
-        run_col1, run_col2 = st.columns([1, 2])
-        
-        with run_col1:
-            run_evaluation = st.button(
-                "🚀 Run Quality Evaluation",
-                type="primary",
-                use_container_width=True,
-                help="Triggers SPCS job with TruLens for AI Observability"
-            )
-        
-        with run_col2:
-            check_status = st.button(
-                "🔄 Check Job Status",
-                use_container_width=True,
-                help="Check status of running evaluation job"
-            )
-        
-        if run_evaluation:
-            st.markdown("### Starting Evaluation Job...")
-            
-            job_name = f"DRI_EVAL_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
-            try:
-                insert_run = execute_query(f"""
-                    INSERT INTO AGEDCARE.AGEDCARE.DRI_EVAL_RUNS 
-                    (RUN_NAME, PROMPT_VERSION, MODEL, SAMPLE_SIZE, STATUS, JOB_NAME)
-                    VALUES ('{run_name}', '{prompt_version}', '{model}', {sample_size}, 'PENDING', '{job_name}')
-                """, session)
-                st.success(f"✅ Evaluation run queued: **{run_name}**")
-                
-                drop_result = execute_query(f"""
-                    DROP SERVICE IF EXISTS AGEDCARE.AGEDCARE.{job_name}
-                """, session)
-                
-                with st.spinner("Executing SPCS evaluation job..."):
-                    job_spec_update = f"""
-                    EXECUTE JOB SERVICE
-                    IN COMPUTE POOL FULLSTACK_COMPUTE_POOL
-                    FROM @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE
-                    SPEC = 'job-run-spec.yaml'
-                    NAME = AGEDCARE.AGEDCARE.{job_name}
-                    QUERY_WAREHOUSE = COMPUTE_WH
-                    EXTERNAL_ACCESS_INTEGRATIONS = (PYPI_ACCESS_INTEGRATION)
-                    """
-                    
-                    st.info(f"""
-**Evaluation Configuration:**
-- Run Name: `{run_name}`
-- Prompt Version: `{prompt_version}`
-- Model: `{model}`
-- Sample Size: `{sample_size}`
-
-The job will read this config from `DRI_EVAL_RUNS` table.
-                    """)
-                    
-                    result = execute_query(job_spec_update, session)
-                    
-                    if result:
-                        status = str(result[0]) if result[0] else 'Unknown'
-                        
-                        if 'DONE' in status.upper() or 'completed' in status.lower():
-                            st.success(f"""
-                            ✅ **Evaluation job completed!**
-                            
-                            - Job Name: `{job_name}`
-                            - Status: {status}
-                            
-                            **View results in Snowsight:**
-                            1. Go to **AI & ML > Evaluations**
-                            2. Click on **DRI_INTELLIGENCE_AGENT**
-                            3. Find run: **{run_name}**
-                            """)
-                            
-                            st.markdown("#### Job Logs")
-                            try:
-                                logs = execute_query(f"""
-                                    SELECT SYSTEM$GET_SERVICE_LOGS('AGEDCARE.AGEDCARE.{job_name}', 0, 'dri-evaluation', 100)
-                                """, session)
-                                if logs:
-                                    log_val = list(logs[0].values())[0] if hasattr(logs[0], 'values') else str(logs[0])
-                                    st.code(log_val, language="text")
-                            except Exception as log_err:
-                                st.warning(f"Could not retrieve logs: {log_err}")
-                        else:
-                            st.info(f"Job status: {status}")
-                    else:
-                        st.warning("Job started but no result returned. Check status below.")
-                        
-            except Exception as e:
-                error_msg = str(e)
-                st.error(f"Failed to execute job: {error_msg}")
-                
-                if "compute pool" in error_msg.lower():
-                    st.warning("Make sure FULLSTACK_COMPUTE_POOL is active and you have permissions.")
-                elif "image" in error_msg.lower() or "not found" in error_msg.lower():
-                    st.warning("""
-                    The evaluation job image may not be deployed. Run these commands:
-                    ```bash
-                    cd dri-intelligence/evaluation_job
-                    snow spcs image-registry login --connection DEMO_SWEINGARTNER
-                    docker buildx build --platform linux/amd64 -t dri-evaluation:latest --load .
-                    docker tag dri-evaluation:latest <registry>/agedcare/agedcare/dri_images/dri-evaluation:latest
-                    docker push <registry>/agedcare/agedcare/dri_images/dri-evaluation:latest
-                    ```
-                    """)
-        
-        if check_status:
-            st.markdown("### Recent Job Status")
-            
-            try:
-                services = execute_query("""
-                    SHOW SERVICES LIKE 'DRI_EVAL%' IN SCHEMA AGEDCARE.AGEDCARE
-                """, session)
-                
-                if services:
-                    for svc in services[-3:]:
-                        svc_name = svc.get('name', 'Unknown')
-                        st.markdown(f"**{svc_name}**")
-                        
-                        try:
-                            status = execute_query(f"""
-                                SELECT SYSTEM$GET_SERVICE_STATUS('AGEDCARE.AGEDCARE.{svc_name}')
-                            """, session)
-                            if status:
-                                st.json(status[0])
-                        except:
-                            st.caption("Status unavailable")
-                else:
-                    st.info("No evaluation jobs found. Run a new evaluation to create one.")
-                    
-            except Exception as e:
-                st.error(f"Could not check status: {e}")
-        
-        st.markdown("---")
-        
-        st.subheader("Quality Metrics Trend")
-        
-        metrics_trend = execute_query_df("""
-            WITH eval_metrics AS (
-                SELECT 
-                    RECORD_ATTRIBUTES:"snow.ai.observability.run.name"::VARCHAR as RUN_NAME,
-                    TIMESTAMP,
-                    RECORD_ATTRIBUTES:"ai.observability.eval.metric_name"::VARCHAR as METRIC_NAME,
-                    RECORD_ATTRIBUTES:"ai.observability.eval_root.score"::FLOAT as SCORE
-                FROM SNOWFLAKE.LOCAL.AI_OBSERVABILITY_EVENTS
-                WHERE RECORD_TYPE = 'SPAN'
-                  AND RECORD_ATTRIBUTES:"snow.ai.observability.object.name"::VARCHAR = 'DRI_INTELLIGENCE_AGENT'
-                  AND RECORD_ATTRIBUTES:"ai.observability.eval.metric_name" IS NOT NULL
-                  AND RECORD_ATTRIBUTES:"ai.observability.eval_root.score" IS NOT NULL
-            )
-            SELECT 
-                RUN_NAME,
-                MIN(TIMESTAMP) as CREATED_TIMESTAMP,
-                ROUND(AVG(CASE WHEN METRIC_NAME = 'groundedness' THEN SCORE END) * 100, 1) as GROUNDEDNESS_PCT,
-                ROUND(AVG(CASE WHEN METRIC_NAME = 'context_relevance' THEN SCORE END) * 100, 1) as CONTEXT_RELEVANCE_PCT,
-                ROUND(AVG(CASE WHEN METRIC_NAME = 'answer_relevance' THEN SCORE END) * 100, 1) as ANSWER_RELEVANCE_PCT,
-                ROUND(AVG(CASE WHEN METRIC_NAME = 'coherence' THEN SCORE END) * 100, 1) as COHERENCE_PCT,
-                COUNT(DISTINCT METRIC_NAME) as METRICS_COUNT
-            FROM eval_metrics
-            GROUP BY RUN_NAME
-            HAVING GROUNDEDNESS_PCT IS NOT NULL
-            ORDER BY CREATED_TIMESTAMP
-        """, session)
-        
-        if metrics_trend is not None and len(metrics_trend) > 0:
-            tab_all, tab_quality, tab_history = st.tabs(["All Metrics", "Quality Scores", "Evaluation History"])
-            
-            with tab_all:
-                chart_data = metrics_trend[['CREATED_TIMESTAMP', 'GROUNDEDNESS_PCT', 'CONTEXT_RELEVANCE_PCT', 'ANSWER_RELEVANCE_PCT', 'COHERENCE_PCT']].copy()
-                chart_data = chart_data.set_index('CREATED_TIMESTAMP')
-                chart_data.columns = ['Groundedness %', 'Context Relevance %', 'Answer Relevance %', 'Coherence %']
-                st.line_chart(chart_data, use_container_width=True)
-                
-                with st.container(border=True):
-                    cols = st.columns(4)
-                    latest = metrics_trend.iloc[-1]
-                    with cols[0]:
-                        g = latest['GROUNDEDNESS_PCT'] or 0
-                        st.metric("Latest Groundedness", f"{g}%")
-                    with cols[1]:
-                        c = latest['CONTEXT_RELEVANCE_PCT'] or 0
-                        st.metric("Latest Context Relevance", f"{c}%")
-                    with cols[2]:
-                        a = latest['ANSWER_RELEVANCE_PCT'] or 0
-                        st.metric("Latest Answer Relevance", f"{a}%")
-                    with cols[3]:
-                        co = latest['COHERENCE_PCT'] or 0
-                        st.metric("Latest Coherence", f"{co}%")
-            
-            with tab_quality:
-                st.markdown("**Quality score targets:**")
-                st.caption("Groundedness: >90% | Context Relevance: >85% | Answer Relevance: >85% | Coherence: >85%")
-                
-                for _, row in metrics_trend.iterrows():
-                    with st.expander(f"{row['RUN_NAME']} - {row['CREATED_TIMESTAMP']}"):
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            g = row['GROUNDEDNESS_PCT'] or 0
-                            delta = "Good" if g >= 90 else "Below target"
-                            st.metric("Groundedness", f"{g}%", delta=delta)
-                        with col2:
-                            c = row['CONTEXT_RELEVANCE_PCT'] or 0
-                            delta = "Good" if c >= 85 else "Below target"
-                            st.metric("Context Rel.", f"{c}%", delta=delta)
-                        with col3:
-                            a = row['ANSWER_RELEVANCE_PCT'] or 0
-                            delta = "Good" if a >= 85 else "Below target"
-                            st.metric("Answer Rel.", f"{a}%", delta=delta)
-                        with col4:
-                            co = row['COHERENCE_PCT'] or 0
-                            delta = "Good" if co >= 85 else "Below target"
-                            st.metric("Coherence", f"{co}%", delta=delta)
-            
-            with tab_history:
-                st.dataframe(
-                    metrics_trend[['RUN_NAME', 'CREATED_TIMESTAMP', 'GROUNDEDNESS_PCT', 'CONTEXT_RELEVANCE_PCT', 'ANSWER_RELEVANCE_PCT', 'COHERENCE_PCT', 'METRICS_COUNT']].rename(
-                        columns={
-                            'RUN_NAME': 'Run Name',
-                            'CREATED_TIMESTAMP': 'Timestamp',
-                            'GROUNDEDNESS_PCT': 'Groundedness %',
-                            'CONTEXT_RELEVANCE_PCT': 'Context Rel %',
-                            'ANSWER_RELEVANCE_PCT': 'Answer Rel %',
-                            'COHERENCE_PCT': 'Coherence %',
-                            'METRICS_COUNT': 'Metrics'
-                        }
-                    ),
-                    use_container_width=True
-                )
-        else:
-            st.info("Run evaluations to see quality metrics trends over time.", icon=":material/info:")
-            
-            with st.container(border=True):
-                st.markdown("**What metrics will be shown:**")
-                st.markdown("""
-                - **Groundedness**: Is the response supported by the retrieved context?
-                - **Context Relevance**: Is the retrieved patient data relevant to the query?
-                - **Answer Relevance**: Does the response properly address the analysis task?
-                - **Coherence**: Is the response logically consistent?
-                """)
-        
-        st.markdown("---")
-        
-        st.subheader("View in Snowsight")
-        
-        with st.container(border=True):
-            st.markdown("""
-            **View detailed traces and evaluations in Snowsight:**
-            
-            Navigate to **AI & ML → Evaluations** to see:
-            - Individual trace analysis with inputs/outputs
-            - LLM judge explanations for each score
-            - Side-by-side comparison of evaluation runs
-            - Cost and latency breakdowns
-            """)
-            
-            st.link_button(
-                "Open Snowsight Evaluations",
-                "https://app.snowflake.com/sfseapac/demo_sweingartner/#/ai-ml/evaluations",
-                icon=":material/open_in_new:"
-            )
-        
-        st.markdown("---")
-        
-        with st.expander("How It Works", expanded=False, icon=":material/architecture:"):
-            st.markdown("""
-            ### Evaluation Architecture
-            
-            1. **EXECUTE JOB SERVICE** runs the TruLens evaluation container
-            2. The container connects to Snowflake and registers with AI Observability
-            3. Each resident analysis is traced with:
-               - **RETRIEVAL** spans (context gathering)
-               - **GENERATION** spans (LLM inference)
-               - **RECORD_ROOT** spans (full request/response)
-            4. Evaluation metrics (groundedness, relevance) are computed via `run.compute_metrics()`
-            5. Results appear in **Snowsight > AI & ML > Evaluations**
-            
-            ```
-            ┌─────────────────────┐     EXECUTE JOB SERVICE      ┌──────────────────────┐
-            │  This Streamlit App │ ─────────────────────────▶   │  SPCS Evaluation Job │
-            │  (Quality Metrics)  │                              │  (TruLens + Python)  │
-            └─────────────────────┘                              └──────────────────────┘
-                     │                                                      │
-                     │  SELECT FROM                                         │ Writes to
-                     ▼                                                      ▼
-            ┌─────────────────────────────────────────────────────────────────────────────┐
-            │                    Snowflake AI Observability Tables                        │
-            │                    (Traces, Evaluations, Metrics)                           │
-            └─────────────────────────────────────────────────────────────────────────────┘
-            ```
-            """)
-    
-    with tab2:
-        st.markdown("""
         ### Batch Test for Review Workflow
         
-        This runs DRI analysis directly and stores results for the **approval workflow**:
+        Run DRI analysis on selected residents and store results for the **approval workflow**:
         - Results stored in `DRI_LLM_ANALYSIS`
         - Creates `DRI_REVIEW_QUEUE` entries for human review
-        - Does NOT appear in Snowsight Evaluations (use Quality Evaluation tab for that)
+        - Approval/rejection decisions become your **quality signal**
         """)
         
         clients = execute_query_df("""
@@ -530,8 +138,6 @@ The job will read this config from `DRI_EVAL_RUNS` table.
         )
         
         if run_batch:
-            import uuid
-            
             batch_id = str(uuid.uuid4())
             total_residents = len(residents_to_process)
             
@@ -663,10 +269,291 @@ The job will read this config from `DRI_EVAL_RUNS` table.
             **Next steps:**
             1. Review results in **Analysis Results** page
             2. Approve/reject in **Review Queue** page
-            
-            ⚠️ This does NOT appear in Snowsight Evaluations.
-            Use the **Quality Evaluation** tab for AI Observability integration.
+            3. Check quality metrics in **Prompt Quality** tab
             """)
+    
+    with tab2:
+        st.markdown("""
+        ### Prompt Quality Score
+        
+        Quality is measured by the **approval rate** of DRI changes by prompt version.
+        This is your **primary quality signal** - better prompts = higher approval rates.
+        """)
+        
+        with st.expander("Understanding Approval-Based Quality Metrics", expanded=False, icon=":material/help:"):
+            st.markdown("""
+### Why Approval Rate is the Best Quality Metric
+
+| Metric | What It Measures | Why It's Better |
+|--------|------------------|-----------------|
+| **Approval Rate** | % of DRI changes approved by reviewers | Measures **clinical accuracy**, not just LLM behavior |
+| **Rejection Reasons** | Why reviewers reject changes | Provides **actionable feedback** for prompt improvement |
+| **Ground Truth Coverage** | How many validated decisions we have | Builds a **test dataset** organically |
+
+### How It Works
+
+```
+1. LLM analyzes resident → Proposes DRI changes
+2. Reviewer approves or rejects → Captures clinical judgment
+3. Approved = correct → Becomes positive ground truth
+4. Rejected = incorrect → Becomes negative ground truth
+5. Approval rate by prompt version → Your quality score
+```
+
+### Interpreting Results
+
+- **>95% approval**: Excellent - prompt is production-ready
+- **85-95% approval**: Good - minor refinement needed
+- **<85% approval**: Review rejection reasons for improvements
+            """)
+        
+        st.markdown("---")
+        
+        quality_data = execute_query_df("""
+            SELECT 
+                lla.PROMPT_VERSION,
+                COUNT(*) as TOTAL_REVIEWS,
+                COUNT(CASE WHEN rq.STATUS = 'APPROVED' THEN 1 END) as APPROVED_COUNT,
+                COUNT(CASE WHEN rq.STATUS = 'REJECTED' THEN 1 END) as REJECTED_COUNT,
+                ROUND(100.0 * COUNT(CASE WHEN rq.STATUS = 'APPROVED' THEN 1 END) / 
+                      NULLIF(COUNT(*), 0), 1) as APPROVAL_RATE_PCT,
+                MIN(lla.ANALYSIS_TIMESTAMP) as FIRST_USED,
+                MAX(lla.ANALYSIS_TIMESTAMP) as LAST_USED,
+                COUNT(DISTINCT lla.RESIDENT_ID) as RESIDENTS_ANALYZED
+            FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla
+            LEFT JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq 
+                ON lla.ANALYSIS_ID = rq.ANALYSIS_ID
+            WHERE rq.STATUS IN ('APPROVED', 'REJECTED')
+            GROUP BY lla.PROMPT_VERSION
+            ORDER BY APPROVAL_RATE_PCT DESC
+        """, session)
+        
+        if quality_data is not None and len(quality_data) > 0:
+            st.subheader("Prompt Version Comparison")
+            
+            best_version = quality_data.iloc[0]
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Best Prompt", best_version['PROMPT_VERSION'])
+            with col2:
+                st.metric("Approval Rate", f"{best_version['APPROVAL_RATE_PCT']}%")
+            with col3:
+                st.metric("Total Reviews", int(best_version['TOTAL_REVIEWS']))
+            
+            st.markdown("#### Approval Rate by Prompt Version")
+            
+            chart_data = quality_data[['PROMPT_VERSION', 'APPROVAL_RATE_PCT', 'APPROVED_COUNT', 'REJECTED_COUNT']].copy()
+            st.bar_chart(chart_data.set_index('PROMPT_VERSION')['APPROVAL_RATE_PCT'])
+            
+            st.markdown("#### Detailed Breakdown")
+            st.dataframe(
+                quality_data.rename(columns={
+                    'PROMPT_VERSION': 'Prompt',
+                    'TOTAL_REVIEWS': 'Reviews',
+                    'APPROVED_COUNT': 'Approved',
+                    'REJECTED_COUNT': 'Rejected',
+                    'APPROVAL_RATE_PCT': 'Approval %',
+                    'FIRST_USED': 'First Used',
+                    'LAST_USED': 'Last Used',
+                    'RESIDENTS_ANALYZED': 'Residents'
+                }),
+                use_container_width=True
+            )
+        else:
+            st.info("No review data yet. Run batch tests and review results to generate quality metrics.", icon=":material/info:")
+            
+            with st.container(border=True):
+                st.markdown("**How to get started:**")
+                st.markdown("""
+                1. Go to **Batch Test** tab and run analysis
+                2. Review results in **Review Queue** page
+                3. Approve or reject the DRI changes
+                4. Return here to see quality metrics
+                """)
+        
+        st.markdown("---")
+        
+        st.subheader("Quality Trend Over Time")
+        
+        trend_data = execute_query_df("""
+            SELECT 
+                DATE_TRUNC('day', rq.REVIEW_TIMESTAMP) AS REVIEW_DATE,
+                lla.PROMPT_VERSION,
+                COUNT(*) as TOTAL_REVIEWS,
+                ROUND(100.0 * COUNT(CASE WHEN rq.STATUS = 'APPROVED' THEN 1 END) / 
+                      NULLIF(COUNT(*), 0), 1) as APPROVAL_RATE_PCT
+            FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq
+            JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+            WHERE rq.STATUS IN ('APPROVED', 'REJECTED')
+              AND rq.REVIEW_TIMESTAMP IS NOT NULL
+            GROUP BY DATE_TRUNC('day', rq.REVIEW_TIMESTAMP), lla.PROMPT_VERSION
+            ORDER BY REVIEW_DATE DESC
+            LIMIT 30
+        """, session)
+        
+        if trend_data is not None and len(trend_data) > 0:
+            pivot_data = trend_data.pivot(index='REVIEW_DATE', columns='PROMPT_VERSION', values='APPROVAL_RATE_PCT')
+            st.line_chart(pivot_data)
+        else:
+            st.caption("Trend data will appear after reviews are completed over multiple days.")
+        
+        st.markdown("---")
+        
+        st.subheader("Rejection Analysis")
+        st.markdown("Common rejection reasons help identify prompt weaknesses.")
+        
+        rejections = execute_query_df("""
+            SELECT 
+                lla.PROMPT_VERSION,
+                rq.REVIEWER_NOTES,
+                COUNT(*) as REJECTION_COUNT
+            FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq
+            JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+            WHERE rq.STATUS = 'REJECTED'
+              AND rq.REVIEWER_NOTES IS NOT NULL
+              AND TRIM(rq.REVIEWER_NOTES) != ''
+            GROUP BY lla.PROMPT_VERSION, rq.REVIEWER_NOTES
+            ORDER BY REJECTION_COUNT DESC
+            LIMIT 10
+        """, session)
+        
+        if rejections is not None and len(rejections) > 0:
+            st.dataframe(
+                rejections.rename(columns={
+                    'PROMPT_VERSION': 'Prompt',
+                    'REVIEWER_NOTES': 'Rejection Reason',
+                    'REJECTION_COUNT': 'Count'
+                }),
+                use_container_width=True
+            )
+        else:
+            st.caption("No rejection reasons recorded yet. Reviewers can add notes when rejecting.")
+    
+    with tab3:
+        st.markdown("""
+        ### Ground Truth Management
+        
+        Ground truth is **automatically harvested** from the approval workflow:
+        - **Approved** DRI changes → Positive examples (indicators should be detected)
+        - **Rejected** DRI changes → Negative examples (false positives to avoid)
+        
+        This builds your test dataset organically without manual labeling.
+        """)
+        
+        gt_count = execute_query("""
+            SELECT COUNT(*) as COUNT FROM AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH WHERE IS_ACTIVE = TRUE
+        """, session)
+        
+        total_gt = gt_count[0]['COUNT'] if gt_count else 0
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Ground Truth Records", total_gt)
+        with col2:
+            pending_reviews = execute_query("""
+                SELECT COUNT(*) as COUNT FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE WHERE STATUS IN ('APPROVED', 'REJECTED')
+            """, session)
+            pending = pending_reviews[0]['COUNT'] if pending_reviews else 0
+            st.metric("Completed Reviews", pending)
+        
+        st.markdown("---")
+        
+        st.subheader("Harvest Ground Truth")
+        st.markdown("Click below to populate ground truth from approved/rejected reviews.")
+        
+        if st.button("🌾 Harvest Ground Truth from Approvals", type="primary"):
+            try:
+                result = execute_query("""
+                    INSERT INTO AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH 
+                    (RESIDENT_ID, INDICATOR_ID, EXPECTED_DETECTED, EVIDENCE_SUMMARY, VALIDATED_BY, SOURCE_REVIEW_ID, PROMPT_VERSION)
+                    SELECT DISTINCT
+                        rq.RESIDENT_ID,
+                        f.value:deficit_id::VARCHAR as INDICATOR_ID,
+                        CASE WHEN rq.STATUS = 'APPROVED' THEN TRUE ELSE FALSE END as EXPECTED_DETECTED,
+                        CASE 
+                            WHEN rq.STATUS = 'APPROVED' THEN f.value:reasoning::VARCHAR
+                            ELSE 'REJECTED: ' || COALESCE(rq.REVIEWER_NOTES, 'No notes')
+                        END as EVIDENCE_SUMMARY,
+                        rq.REVIEWER_USER as VALIDATED_BY,
+                        rq.QUEUE_ID as SOURCE_REVIEW_ID,
+                        lla.PROMPT_VERSION
+                    FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq
+                    JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
+                    LATERAL FLATTEN(input => COALESCE(rq.INDICATOR_CHANGES_JSON, PARSE_JSON('[]'))) f
+                    WHERE rq.STATUS IN ('APPROVED', 'REJECTED')
+                      AND f.value:detected::BOOLEAN = TRUE
+                      AND NOT EXISTS (
+                          SELECT 1 FROM AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH gt 
+                          WHERE gt.SOURCE_REVIEW_ID = rq.QUEUE_ID 
+                            AND gt.INDICATOR_ID = f.value:deficit_id::VARCHAR
+                      )
+                """, session)
+                
+                new_count = execute_query("""
+                    SELECT COUNT(*) as COUNT FROM AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH WHERE IS_ACTIVE = TRUE
+                """, session)
+                new_total = new_count[0]['COUNT'] if new_count else 0
+                added = new_total - total_gt
+                
+                st.success(f"✅ Harvested {added} new ground truth records. Total: {new_total}")
+                
+            except Exception as e:
+                st.error(f"Error harvesting ground truth: {str(e)}")
+        
+        st.markdown("---")
+        
+        st.subheader("Ground Truth Coverage")
+        
+        coverage = execute_query_df("""
+            SELECT 
+                PROMPT_VERSION,
+                COUNT(DISTINCT RESIDENT_ID) as RESIDENTS,
+                COUNT(*) as TOTAL_RECORDS,
+                COUNT(CASE WHEN EXPECTED_DETECTED = TRUE THEN 1 END) as POSITIVE_CASES,
+                COUNT(CASE WHEN EXPECTED_DETECTED = FALSE THEN 1 END) as NEGATIVE_CASES,
+                MAX(VALIDATED_TIMESTAMP) as LAST_UPDATED
+            FROM AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH
+            WHERE IS_ACTIVE = TRUE
+            GROUP BY PROMPT_VERSION
+            ORDER BY TOTAL_RECORDS DESC
+        """, session)
+        
+        if coverage is not None and len(coverage) > 0:
+            st.dataframe(
+                coverage.rename(columns={
+                    'PROMPT_VERSION': 'Prompt',
+                    'RESIDENTS': 'Residents',
+                    'TOTAL_RECORDS': 'Total',
+                    'POSITIVE_CASES': 'Positives',
+                    'NEGATIVE_CASES': 'Negatives',
+                    'LAST_UPDATED': 'Last Updated'
+                }),
+                use_container_width=True
+            )
+        else:
+            st.caption("No ground truth data yet. Complete reviews and harvest to build your test dataset.")
+        
+        st.markdown("---")
+        
+        with st.expander("View Ground Truth Details", expanded=False):
+            gt_details = execute_query_df("""
+                SELECT 
+                    RESIDENT_ID,
+                    INDICATOR_ID,
+                    EXPECTED_DETECTED,
+                    LEFT(EVIDENCE_SUMMARY, 100) as EVIDENCE,
+                    VALIDATED_BY,
+                    VALIDATED_TIMESTAMP
+                FROM AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH
+                WHERE IS_ACTIVE = TRUE
+                ORDER BY VALIDATED_TIMESTAMP DESC
+                LIMIT 50
+            """, session)
+            
+            if gt_details is not None and len(gt_details) > 0:
+                st.dataframe(gt_details, use_container_width=True)
+            else:
+                st.caption("No ground truth records found.")
 
 else:
     st.error("Failed to connect to Snowflake")

@@ -344,56 +344,16 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_AUDIT_LOG (
 );
 ```
 
-### 2.4 AI Observability Tables
+### 2.4 Quality Metrics Tables & Views
 
-**Architecture Note (v1.4):** The AI Observability system has been restructured:
-- **TruLens** runs in a **separate SPCS Job container** (DRI_EVALUATION_JOB), not in the Streamlit app
-- The Streamlit app's "Run Evaluation" button runs **synchronous LLM analysis** and stores execution metrics
-- Full TruLens-based quality metrics (groundedness scores, context relevance) require deploying the SPCS evaluation job
-- Results viewable in **Snowsight AI & ML → Evaluations** only when TruLens integration is active
+**Architecture Note (v1.7):** The AI Observability / TruLens integration has been **removed** in favor of a simpler approval-based quality metrics approach. Quality is measured through the human review workflow, not LLM-as-judge metrics.
 
 ```sql
 -- ============================================================================
--- AI OBSERVABILITY TABLES (TruLens Integration)
+-- QUALITY METRICS (Approval-Based - v1.7 Simplified Architecture)
 -- ============================================================================
 
--- Evaluation Metrics (Aggregate per evaluation run)
-CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS (
-    EVALUATION_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
-    EVALUATION_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    MODEL_USED VARCHAR(64),
-    PROMPT_VERSION VARCHAR(32),
-    RESIDENTS_EVALUATED NUMBER,
-    AVG_GROUNDEDNESS FLOAT,
-    AVG_CONTEXT_RELEVANCE FLOAT,
-    AVG_ANSWER_RELEVANCE FLOAT,
-    FALSE_POSITIVE_COUNT NUMBER,
-    TRUE_POSITIVE_COUNT NUMBER,
-    FALSE_POSITIVE_RATE FLOAT,
-    EVALUATION_NOTES VARCHAR(16777216),
-    CREATED_BY VARCHAR(256),
-    PRIMARY KEY (EVALUATION_ID)
-);
-
--- Evaluation Detail (Per-resident evaluation results)
-CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_EVALUATION_DETAIL (
-    DETAIL_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
-    EVALUATION_ID VARCHAR(36) NOT NULL,
-    RESIDENT_ID NUMBER NOT NULL,
-    GROUNDEDNESS_SCORE FLOAT,
-    CONTEXT_RELEVANCE_SCORE FLOAT,
-    ANSWER_RELEVANCE_SCORE FLOAT,
-    INDICATORS_DETECTED NUMBER,
-    FALSE_POSITIVES NUMBER,
-    TRUE_POSITIVES NUMBER,
-    FP_INDICATORS VARIANT,
-    TP_INDICATORS VARIANT,
-    RAW_EVALUATION_JSON VARIANT,
-    PRIMARY KEY (DETAIL_ID),
-    FOREIGN KEY (EVALUATION_ID) REFERENCES DRI_EVALUATION_METRICS(EVALUATION_ID)
-);
-
--- Ground Truth (Validated test cases for accuracy measurement)
+-- Ground Truth (Auto-populated from approved/rejected review decisions)
 CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH (
     GROUND_TRUTH_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
     RESIDENT_ID NUMBER NOT NULL,
@@ -403,35 +363,129 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH (
     VALIDATED_BY VARCHAR(256),
     VALIDATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     SOURCE_REVIEW_ID VARCHAR(36),
+    PROMPT_VERSION VARCHAR(32),
     IS_ACTIVE BOOLEAN DEFAULT TRUE,
     PRIMARY KEY (GROUND_TRUTH_ID)
 );
 
--- View: Evaluation Summary (for dashboard)
-CREATE OR REPLACE VIEW AGEDCARE.AGEDCARE.V_EVALUATION_SUMMARY AS
+-- View: Prompt Quality Score (Primary Quality Metric)
+-- This is the KEY quality metric - approval rate by prompt version
+CREATE OR REPLACE VIEW AGEDCARE.AGEDCARE.V_PROMPT_QUALITY_SCORE AS
 SELECT 
-    EVALUATION_ID,
-    EVALUATION_TIMESTAMP,
-    MODEL_USED,
-    PROMPT_VERSION,
-    RESIDENTS_EVALUATED,
-    ROUND(AVG_GROUNDEDNESS * 100, 1) AS GROUNDEDNESS_PCT,
-    ROUND(AVG_CONTEXT_RELEVANCE * 100, 1) AS CONTEXT_RELEVANCE_PCT,
-    ROUND(AVG_ANSWER_RELEVANCE * 100, 1) AS ANSWER_RELEVANCE_PCT,
-    ROUND(FALSE_POSITIVE_RATE * 100, 2) AS FP_RATE_PCT,
-    CASE WHEN FALSE_POSITIVE_RATE < 0.01 THEN 'PASS' ELSE 'FAIL' END AS FP_TARGET_STATUS
-FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
-ORDER BY EVALUATION_TIMESTAMP DESC;
+    lla.PROMPT_VERSION,
+    COUNT(*) as TOTAL_REVIEWS,
+    COUNT(CASE WHEN rq.STATUS = 'APPROVED' THEN 1 END) as APPROVED_COUNT,
+    COUNT(CASE WHEN rq.STATUS = 'REJECTED' THEN 1 END) as REJECTED_COUNT,
+    ROUND(100.0 * COUNT(CASE WHEN rq.STATUS = 'APPROVED' THEN 1 END) / 
+          NULLIF(COUNT(*), 0), 2) as APPROVAL_RATE_PCT,
+    MIN(lla.ANALYSIS_TIMESTAMP) as FIRST_USED,
+    MAX(lla.ANALYSIS_TIMESTAMP) as LAST_USED,
+    COUNT(DISTINCT lla.RESIDENT_ID) as RESIDENTS_ANALYZED
+FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla
+LEFT JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq 
+    ON lla.ANALYSIS_ID = rq.ANALYSIS_ID
+WHERE rq.STATUS IN ('APPROVED', 'REJECTED')
+GROUP BY lla.PROMPT_VERSION
+ORDER BY APPROVAL_RATE_PCT DESC;
 
--- View: FP Rate Trend (for trend chart)
-CREATE OR REPLACE VIEW AGEDCARE.AGEDCARE.V_FP_RATE_TREND AS
+-- View: Quality Trend Over Time
+CREATE OR REPLACE VIEW AGEDCARE.AGEDCARE.V_QUALITY_TREND AS
 SELECT 
-    DATE_TRUNC('day', EVALUATION_TIMESTAMP) AS EVAL_DATE,
-    AVG(FALSE_POSITIVE_RATE) * 100 AS AVG_FP_RATE_PCT,
-    COUNT(*) AS EVAL_COUNT
-FROM AGEDCARE.AGEDCARE.DRI_EVALUATION_METRICS
-GROUP BY DATE_TRUNC('day', EVALUATION_TIMESTAMP)
-ORDER BY EVAL_DATE;
+    DATE_TRUNC('day', rq.REVIEW_TIMESTAMP) AS REVIEW_DATE,
+    lla.PROMPT_VERSION,
+    COUNT(*) as TOTAL_REVIEWS,
+    COUNT(CASE WHEN rq.STATUS = 'APPROVED' THEN 1 END) as APPROVED,
+    COUNT(CASE WHEN rq.STATUS = 'REJECTED' THEN 1 END) as REJECTED,
+    ROUND(100.0 * COUNT(CASE WHEN rq.STATUS = 'APPROVED' THEN 1 END) / 
+          NULLIF(COUNT(*), 0), 2) as APPROVAL_RATE_PCT
+FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq
+JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+WHERE rq.STATUS IN ('APPROVED', 'REJECTED')
+  AND rq.REVIEW_TIMESTAMP IS NOT NULL
+GROUP BY DATE_TRUNC('day', rq.REVIEW_TIMESTAMP), lla.PROMPT_VERSION
+ORDER BY REVIEW_DATE DESC;
+
+-- View: Rejection Analysis (for prompt improvement insights)
+CREATE OR REPLACE VIEW AGEDCARE.AGEDCARE.V_REJECTION_ANALYSIS AS
+SELECT 
+    lla.PROMPT_VERSION,
+    rq.REVIEWER_NOTES,
+    COUNT(*) as REJECTION_COUNT,
+    LISTAGG(DISTINCT rq.RESIDENT_ID::VARCHAR, ', ') as AFFECTED_RESIDENTS
+FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq
+JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+WHERE rq.STATUS = 'REJECTED'
+  AND rq.REVIEWER_NOTES IS NOT NULL
+GROUP BY lla.PROMPT_VERSION, rq.REVIEWER_NOTES
+ORDER BY REJECTION_COUNT DESC;
+
+-- View: Ground Truth Coverage (for test dataset completeness)
+CREATE OR REPLACE VIEW AGEDCARE.AGEDCARE.V_GROUND_TRUTH_COVERAGE AS
+SELECT 
+    gt.PROMPT_VERSION,
+    COUNT(DISTINCT gt.RESIDENT_ID) as RESIDENTS_WITH_GROUND_TRUTH,
+    COUNT(*) as TOTAL_VALIDATED_DECISIONS,
+    COUNT(CASE WHEN gt.EXPECTED_DETECTED = TRUE THEN 1 END) as POSITIVE_CASES,
+    COUNT(CASE WHEN gt.EXPECTED_DETECTED = FALSE THEN 1 END) as NEGATIVE_CASES,
+    MAX(gt.VALIDATED_TIMESTAMP) as LAST_UPDATED
+FROM AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH gt
+WHERE gt.IS_ACTIVE = TRUE
+GROUP BY gt.PROMPT_VERSION;
+
+-- Stored Procedure: Auto-populate ground truth from approved reviews
+CREATE OR REPLACE PROCEDURE AGEDCARE.AGEDCARE.HARVEST_GROUND_TRUTH_FROM_APPROVALS()
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    -- Insert approved indicators as positive ground truth
+    INSERT INTO AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH 
+    (RESIDENT_ID, INDICATOR_ID, EXPECTED_DETECTED, EVIDENCE_SUMMARY, VALIDATED_BY, SOURCE_REVIEW_ID, PROMPT_VERSION)
+    SELECT DISTINCT
+        rq.RESIDENT_ID,
+        f.value:deficit_id::VARCHAR as INDICATOR_ID,
+        TRUE as EXPECTED_DETECTED,
+        f.value:reasoning::VARCHAR as EVIDENCE_SUMMARY,
+        rq.REVIEWER_USER as VALIDATED_BY,
+        rq.QUEUE_ID as SOURCE_REVIEW_ID,
+        lla.PROMPT_VERSION
+    FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq
+    JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
+    LATERAL FLATTEN(input => rq.INDICATOR_CHANGES_JSON) f
+    WHERE rq.STATUS = 'APPROVED'
+      AND f.value:detected::BOOLEAN = TRUE
+      AND NOT EXISTS (
+          SELECT 1 FROM AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH gt 
+          WHERE gt.SOURCE_REVIEW_ID = rq.QUEUE_ID 
+            AND gt.INDICATOR_ID = f.value:deficit_id::VARCHAR
+      );
+    
+    -- Insert rejected indicators as negative ground truth (false positives)
+    INSERT INTO AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH 
+    (RESIDENT_ID, INDICATOR_ID, EXPECTED_DETECTED, EVIDENCE_SUMMARY, VALIDATED_BY, SOURCE_REVIEW_ID, PROMPT_VERSION)
+    SELECT DISTINCT
+        rq.RESIDENT_ID,
+        f.value:deficit_id::VARCHAR as INDICATOR_ID,
+        FALSE as EXPECTED_DETECTED,
+        'REJECTED: ' || COALESCE(rq.REVIEWER_NOTES, 'No notes') as EVIDENCE_SUMMARY,
+        rq.REVIEWER_USER as VALIDATED_BY,
+        rq.QUEUE_ID as SOURCE_REVIEW_ID,
+        lla.PROMPT_VERSION
+    FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq
+    JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
+    LATERAL FLATTEN(input => rq.INDICATOR_CHANGES_JSON) f
+    WHERE rq.STATUS = 'REJECTED'
+      AND f.value:detected::BOOLEAN = TRUE
+      AND NOT EXISTS (
+          SELECT 1 FROM AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH gt 
+          WHERE gt.SOURCE_REVIEW_ID = rq.QUEUE_ID 
+            AND gt.INDICATOR_ID = f.value:deficit_id::VARCHAR
+      );
+    
+    RETURN 'Ground truth harvested from approved/rejected reviews';
+END;
+$$;
 ```
 
 ### 2.5 Cortex Search Service
@@ -722,16 +776,15 @@ dri-intelligence/
 ├── streamlit_app.py           # Main entry point with st.navigation()
 ├── app_pages/                  # Page modules (loaded via st.Page)
 │   ├── dashboard.py            # Dashboard - Overview metrics
-│   ├── prompt_engineering.py   # Prompt Engineering - Test/tune prompts + Evaluation
+│   ├── prompt_engineering.py   # Prompt Engineering - Test/tune prompts
 │   ├── review_queue.py         # Review Queue - Approval workflow
 │   ├── analysis_results.py     # Analysis Results - View LLM output
 │   ├── configuration.py        # Configuration - Client & processing settings
 │   ├── comparison.py           # Claude vs Regex - DEMO ONLY (to be removed)
-│   └── quality_metrics.py      # Quality Metrics - AI Observability dashboard
+│   └── batch_testing.py        # Batch Testing + Approval-based Quality Metrics
 ├── src/
 │   ├── connection_helper.py    # Snowflake session management
-│   ├── dri_analysis.py         # LLM analysis functions
-│   └── ai_observability.py     # TruLens integration for AI metrics
+│   └── dri_analysis.py         # LLM analysis functions
 └── requirements.txt
 ```
 
@@ -742,7 +795,7 @@ dri-intelligence/
 - Analysis results (:material/analytics:)
 - Configuration (:material/settings:)
 - Claude vs Regex (:material/compare_arrows:) - DEMO ONLY
-- Quality metrics (:material/monitoring:)
+- Batch testing (:material/labs:)
 
 ### 5.2 Page 2: Prompt Engineering / Model Testing (Key Page)
 
@@ -851,65 +904,45 @@ The Processing Settings tab controls production batch processing configuration:
 - Side-by-side DRI score comparison
 - Detailed indicator breakdown
 
-### 5.7 Page 7: Quality Metrics (AI Observability)
+### 5.7 Page 7: Batch Testing & Quality Metrics (Simplified v1.7)
 
-This page surfaces AI Observability metrics in a clinician-friendly format:
+This page provides batch testing and **approval-based quality metrics**:
 
-**Current Implementation (v1.4):**
-
-The page displays **two modes** based on available data:
-
-1. **Execution Metrics Mode** (default when TruLens not deployed):
-   - Records evaluated count
-   - Total records in evaluation
-   - Status (COMPLETED/RUNNING)
-   - Average latency per analysis
-
-2. **Full Quality Metrics Mode** (when TruLens SPCS job is active):
-   - Groundedness score (target >90%)
-   - Context relevance score (target >85%)
-   - Answer relevance score (target >85%)
-   - False positive rate (target <1%)
+**Architecture Change (v1.7):** TruLens/AI Observability has been **removed**. Quality is now measured through the human review workflow.
 
 **Implemented Features:**
 
-1. **Current Quality Status**
-   - Overall groundedness score (target >90%)
-   - Context relevance score (target >85%)
-   - Answer relevance score (target >85%)
-   - Current false positive rate (target <1%)
-   - Trend indicators (improving/declining)
+1. **Batch Test Section**
+   - Client selector
+   - Sample size slider
+   - Run batch analysis and store for review
+   - Progress tracking
+   - Results summary
 
-2. **False Positive Rate Trend Chart**
-   - Line chart showing FP rate over time
-   - Target line at 1%
-   - Date range filtering
+2. **Prompt Quality Dashboard**
+   - Approval rate by prompt version (from V_PROMPT_QUALITY_SCORE view)
+   - Bar chart comparing prompt versions
+   - Best performing prompt highlighted
 
-3. **Run Evaluation Section**
-   - Resident selector for evaluation
-   - Model/prompt selection
-   - "Run Evaluation" button triggers TruLens assessment
-   - Progress indicator during evaluation
+3. **Quality Trend Chart**
+   - Approval rate over time (from V_QUALITY_TREND view)
+   - Trend line by prompt version
+   - Goal line at target approval rate
 
-4. **Evaluation History Table**
-   - List of all evaluation runs
-   - Columns: Date, Residents, Model, Groundedness, FP Rate, Status
-   - Click to drill down to per-resident details
+4. **Ground Truth Status**
+   - Count of validated decisions (from DRI_GROUND_TRUTH)
+   - Coverage by prompt version
+   - Button to harvest ground truth from recent approvals
 
-5. **Ground Truth Management**
-   - View/manage validated test cases in DRI_GROUND_TRUTH
-   - Add new ground truth from approved review items
-   - Export ground truth for external validation
+5. **Rejection Analysis**
+   - Most common rejection reasons (from V_REJECTION_ANALYSIS view)
+   - Actionable insights for prompt improvement
 
 **Technical Integration:**
-
-*Architecture Change (v1.4):*
-- TruLens has been moved to a separate SPCS Job container (DRI_EVALUATION_JOB)
-- The Streamlit app does NOT include TruLens packages (too heavy for container runtime limits)
-- "Run Evaluation" from the Quality Metrics page runs synchronous batch analysis
-- Full TruLens metrics require deploying the SPCS evaluation job separately
-- Stores execution data in DRI_EVALUATION_METRICS and DRI_EVALUATION_DETAIL tables
-- Snowsight AI & ML → Evaluations shows data only when TruLens integration is active
+- All metrics derived from DRI_REVIEW_QUEUE and DRI_LLM_ANALYSIS tables
+- SQL views provide real-time aggregation
+- No external SPCS containers or TruLens packages required
+- Ground truth auto-populated via HARVEST_GROUND_TRUTH_FROM_APPROVALS() procedure
 
 #### Configuration Page Mockup
 
@@ -1214,7 +1247,7 @@ CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.add
 
 ### 8.2 requirements.txt / pyproject.toml
 
-**Streamlit App (pyproject.toml - current v1.4):**
+**Streamlit App (pyproject.toml - v1.7 Simplified):**
 ```toml
 [project]
 name = "dri-intelligence"
@@ -1227,50 +1260,11 @@ dependencies = [
 ]
 ```
 
-**Note:** TruLens packages are NOT included in the Streamlit app. They are installed in the separate SPCS evaluation job container.
+**Note (v1.7):** TruLens packages have been **removed entirely**. Quality metrics are now derived from the approval workflow via SQL views. No external evaluation containers required.
 
-**SPCS Evaluation Job Container (requirements.txt):**
-```
-snowflake-connector-python[pandas]>=3.0.0
-snowflake-snowpark-python>=1.0.0
-snowflake-ml-python>=1.5.0
-pandas>=2.0.0
+### 8.3 SPCS Service Definition (Streamlit App Only)
 
-# TruLens packages for Snowflake AI Observability
-# Per official quickstart: https://www.snowflake.com/en/developers/guides/getting-started-with-ai-observability/
-trulens-core>=2.1.2
-trulens-connectors-snowflake>=2.1.2
-trulens-providers-cortex>=2.1.2
-```
-
-### 8.3 Docker Build for SPCS
-
-**CRITICAL:** SPCS only supports `linux/amd64` architecture. Always build with:
-
-```bash
-docker buildx build --platform linux/amd64 -t dri-evaluation:latest --load .
-```
-
-Do NOT use standard `docker build` on Apple Silicon Macs - the resulting arm64 image will fail to run on SPCS.
-
-### 8.4 SPCS Image Registry
-
-Use the Snowflake CLI for registry authentication:
-
-```bash
-# Login to registry
-snow spcs image-registry login --connection <connection_name>
-
-# Get registry URL
-snow spcs image-registry url --connection <connection_name>
-# Example: sfseapac-demo-sweingartner.registry.snowflakecomputing.com
-
-# Tag and push
-docker tag dri-evaluation:latest <registry>/agedcare/agedcare/dri_images/dri-evaluation:latest
-docker push <registry>/agedcare/agedcare/dri_images/dri-evaluation:latest
-```
-
-### 8.3 SPCS Service Definition
+**Note (v1.7):** The TruLens evaluation job container has been removed. Only the Streamlit app container is required.
 
 ```sql
 -- Create compute pool
@@ -1643,9 +1637,9 @@ The warehouse `MYWH` is used ONLY for:
 
 ---
 
-*Document Version: 1.6*  
+*Document Version: 1.7*  
 *Created: 2026-01-28*  
-*Updated: 2026-02-06*  
+*Updated: 2026-02-17*  
 *Status: Approved*
 
 ### Change Log
@@ -1658,3 +1652,4 @@ The warehouse `MYWH` is used ONLY for:
 | 1.4 | 2026-02-05 | Architecture update: TruLens moved to separate SPCS job container (DRI_EVALUATION_JOB), Streamlit app no longer requires TruLens packages, evaluations from UI run synchronously without TruLens, updated pyproject.toml dependencies, clarified quality metrics page shows execution metrics (not TruLens scores) unless full TruLens integration deployed |
 | 1.5 | 2026-02-05 | UI improvements: Resident dropdown shows facility name, auto-select client config based on resident, Run Quality Evaluation button triggers SPCS job via EXECUTE JOB SERVICE, sample size selector added |
 | 1.6 | 2026-02-06 | AI Observability integration fixed: TruLens SDK patterns corrected (TruApp constructor uses positional arg, dataset_spec uses lowercase keys), Docker build requires `--platform linux/amd64` for SPCS, evaluation results now appear in Snowsight AI & ML > Evaluations, updated requirements.txt to use trulens-core>=2.1.2 |
+| 1.7 | 2026-02-17 | **Architecture Simplification**: Removed TruLens/AI Observability entirely. Replaced with approval-based quality metrics. Added V_PROMPT_QUALITY_SCORE, V_QUALITY_TREND, V_REJECTION_ANALYSIS views. Added HARVEST_GROUND_TRUTH_FROM_APPROVALS() procedure. Removed ai_observability.py, evaluation_job/ directory, and TruLens packages. |

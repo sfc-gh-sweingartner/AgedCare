@@ -112,7 +112,7 @@ This document defines the functional design for replacing Telstra Health's regex
 | Prompt Engineering UI | Business user prompt tuning | Streamlit on SPCS |
 | Review Queue | Human approval workflow | Snowflake tables + Streamlit |
 | Batch Processor | Scheduled analysis runs | Snowflake Notebook/Task |
-| AI Observability | Quality metrics & evaluation | TruLens + Snowflake AI Observability |
+| Quality Metrics | Approval-based prompt quality scoring | SQL Views + DRI_REVIEW_QUEUE |
 
 ---
 
@@ -397,21 +397,27 @@ This formula:
 
 **Critical Requirement**: Every LLM-identified deficit must link back to source records.
 
-### 2.8.1 AI Observability Integration
+### 2.8.1 Approval-Based Quality Metrics
 
-The solution integrates with Snowflake AI Observability for continuous quality monitoring:
+The solution uses the human approval workflow as the primary quality signal:
 
-| Metric | Purpose | Target |
-|--------|---------|--------|
-| **Groundedness** | Measures if LLM response is grounded in resident data | >90% |
-| **Context Relevance** | Measures if retrieved RAG context is relevant | >85% |
-| **Answer Relevance** | Measures if response addresses the clinical query | >85% |
-| **False Positive Rate** | Tracks incorrect indicator detections over time | <1% |
+| Metric | Purpose | How Calculated |
+|--------|---------|----------------|
+| **Approval Rate** | Measures prompt effectiveness | Approved / (Approved + Rejected) per prompt version |
+| **Rejection Reasons** | Identifies prompt weaknesses | Aggregated from reviewer notes |
+| **False Positive Rate** | Tracks incorrect detections | Rejected indicators / Total detected |
+| **Ground Truth Coverage** | Measures validation dataset size | Count of validated indicator decisions |
 
-**Architecture Decision**: Hybrid approach
-- **Streamlit UI**: Clinician-facing interface (user-friendly for non-technical users)
-- **AI Observability Backend**: Metrics storage, audit trail for compliance
-- **Quality Metrics Page**: Surfaces AI Observability data in Streamlit for business users
+**Architecture Decision**: Simplified approach
+- **Streamlit UI**: Clinician-facing interface with quality dashboards
+- **DRI_REVIEW_QUEUE**: Source of truth for quality signals (approvals/rejections)
+- **DRI_GROUND_TRUTH**: Auto-populated from approved/rejected review decisions
+- **V_PROMPT_QUALITY_SCORE**: SQL view aggregating approval rates by prompt version
+
+**Key Insight**: The human-in-the-loop approval workflow provides better quality signals than LLM-as-judge metrics because:
+1. Reviewers assess clinical accuracy, not just LLM behavior
+2. Rejection reasons provide actionable feedback for prompt improvement
+3. Approved decisions become validated ground truth for future testing
 
 | Traceability Field | Description | Example |
 |--------------------|-------------|---------|
@@ -731,19 +737,19 @@ DRI Intelligence POC (Implemented)
 - Demo warning banner displayed at top
 - Detailed indicator breakdown tabs
 
-#### Page 7: Quality Metrics (IMPLEMENTED - AI Observability)
-This page surfaces AI Observability metrics in a clinician-friendly format:
-- **Current Quality Status**: Latest evaluation groundedness, context relevance, answer relevance, FP rate
-- **False Positive Rate Trend**: Chart showing FP rate over time with <1% target line
-- **Run Quality Evaluation**: Button to trigger SPCS job evaluation (runs TruLens in separate container)
-- **Sample Size Selection**: Choose number of residents for evaluation (10, 25, 50, All)
-- **Evaluation History**: List of all evaluation runs with drill-down to per-resident details
+#### Batch Testing Page (Simplified)
+This page provides batch analysis and approval-based quality metrics:
+- **Batch Test**: Run DRI analysis on selected residents, store results for review
+- **Prompt Quality Dashboard**: Shows approval rates by prompt version
+- **Quality Trend**: Chart showing approval rate trends over time
+- **Ground Truth Status**: Shows count of validated decisions available for testing
+- **Explainability Log**: Links to DRI_LLM_ANALYSIS for audit trail
 
 **Technical Integration**:
-- Uses TruLens for LLM-as-judge evaluation (groundedness, relevance scores)
-- TruLens runs in separate SPCS Job container (not in Streamlit app)
-- Triggered via `EXECUTE JOB SERVICE` command from UI
-- Stores metrics in DRI_EVALUATION_METRICS and DRI_EVALUATION_DETAIL tables
+- Quality metrics derived from DRI_REVIEW_QUEUE (approvals/rejections)
+- No external SPCS containers required
+- Ground truth auto-populated from approved/rejected decisions
+- SQL views provide real-time quality scoring
 
 ---
 
@@ -856,7 +862,7 @@ Existing ETL ──▶ 6 Source Tables ──▶ Client Config ──▶ LLM Eng
 - Mobile interface
 - Multi-client onboarding automation
 - Automated prompt optimization
-- Full TruLens OTEL tracing (currently using direct LLM-as-judge evaluation)
+- LLM-as-judge evaluation metrics (removed in v1.7 - using approval-based metrics instead)
 
 ### 8.3 Success Criteria
 1. False positive rate <1% on test dataset
@@ -883,7 +889,7 @@ Existing ETL ──▶ 6 Source Tables ──▶ Client Config ──▶ LLM Eng
 | Analysis Results page | ✅ Complete | Browse LLM analyses |
 | Configuration page | ✅ Complete | 5 tabs including processing settings |
 | Claude vs Regex page | ✅ Complete (DEMO) | Side-by-side comparison - demo only, to be removed |
-| Quality Metrics page | ✅ Complete | AI Observability integration with TruLens |
+| Batch Testing page | ✅ Complete | Batch analysis + approval-based quality metrics |
 | Adaptive token sizing | ✅ Complete | Context threshold-based mode selection |
 | Production config storage | ✅ Complete | Model/prompt stored per-client in CONFIG_JSON |
 
@@ -933,7 +939,7 @@ This document has been updated based on feedback from Telstra Health's data engi
 
 ---
 
-*Document Version: 1.6*  
+*Document Version: 1.7*  
 *Created: 2025-01-27*  
-*Updated: 2026-02-05 (UI improvements, test data expansion)*  
+*Updated: 2026-02-17 (Architecture simplification - removed TruLens, added approval-based metrics)*  
 *Status: Approved*
