@@ -5,7 +5,6 @@ Interactive page for testing and tuning LLM prompts:
 - Choose model (Claude 4.5, etc.) and prompt version
 - Edit prompts with variable placeholders
 - Run single analysis and view JSON results
-- Run SPCS evaluation job for AI Observability metrics (Snowsight)
 - Save new prompt versions
 
 Uses Snowflake Cortex Complete for LLM inference.
@@ -120,11 +119,21 @@ if session:
                     obs AS (
                         SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 50), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
                         FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
+                    ),
+                    medical_profile AS (
+                        SELECT COALESCE(SPECIAL_NEEDS, '') || ' | Allergies: ' || COALESCE(ALLERGIES, 'None') || ' | Diet: ' || COALESCE(DIET, 'Standard') as txt
+                        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {selected_resident}
+                    ),
+                    obs_groups AS (
+                        SELECT LISTAGG(CHART_NAME || ' (' || OBSERVATION_STATUS || '): ' || OBSERVATION_TYPE || ' - ' || OBSERVATION_LOCATION || ' - ' || COALESCE(OBSERVATION_DESCRIPTION, ''), ' | ') as txt
+                        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
                     )
                     SELECT 
-                        'PROGRESS NOTES:\\n' || (SELECT txt FROM notes) ||
-                        '\\n\\nMEDICATIONS:\\n' || (SELECT txt FROM meds) ||
-                        '\\n\\nOBSERVATIONS:\\n' || (SELECT txt FROM obs) as CONTEXT
+                        'MEDICAL PROFILE (DIAGNOSES):\\n' || COALESCE((SELECT txt FROM medical_profile), 'None') ||
+                        '\\n\\nPROGRESS NOTES:\\n' || COALESCE((SELECT txt FROM notes), 'None') ||
+                        '\\n\\nMEDICATIONS:\\n' || COALESCE((SELECT txt FROM meds), 'None') ||
+                        '\\n\\nOBSERVATIONS:\\n' || COALESCE((SELECT txt FROM obs), 'None') ||
+                        '\\n\\nOBSERVATION GROUPS (Wounds/Pain):\\n' || COALESCE((SELECT txt FROM obs_groups), 'None') as CONTEXT
                 """
                 result = execute_query(context_query, session)
                 if result:
@@ -168,74 +177,7 @@ if session:
     
     st.subheader("🚀 Run analysis")
     
-    col_run1, col_run2 = st.columns([1, 1])
-    
-    with col_run1:
-        run_button = st.button("🧪 Run Single Analysis", type="primary", use_container_width=True, help="Test prompt on selected resident")
-    
-    with col_run2:
-        run_eval_button = st.button("📊 Run Evaluation (AI Observability)", use_container_width=True, help="Trigger SPCS job for Snowsight Evaluations")
-    
-    if run_eval_button:
-        from datetime import datetime
-        st.markdown("### 🔬 Running AI Observability Evaluation")
-        
-        with st.form("eval_form"):
-            eval_col1, eval_col2 = st.columns(2)
-            with eval_col1:
-                eval_run_name = st.text_input("Run Name", value=f"Prompt_{selected_version}_{datetime.now().strftime('%Y%m%d_%H%M')}")
-                eval_sample_size = st.selectbox("Sample Size", [5, 10, 20, 50], index=1)
-            with eval_col2:
-                st.info(f"Model: {selected_model}\nPrompt: {selected_version}")
-            
-            submit_eval = st.form_submit_button("🚀 Start Evaluation Job")
-            
-            if submit_eval:
-                job_name = f"DRI_EVAL_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                
-                try:
-                    execute_query(f"""
-                        INSERT INTO AGEDCARE.AGEDCARE.DRI_EVAL_RUNS 
-                        (RUN_NAME, PROMPT_VERSION, MODEL, SAMPLE_SIZE, STATUS, JOB_NAME)
-                        VALUES ('{eval_run_name}', '{selected_version}', '{selected_model}', {eval_sample_size}, 'PENDING', '{job_name}')
-                    """, session)
-                    st.success(f"✅ Evaluation queued: **{eval_run_name}**")
-                    
-                    execute_query(f"DROP SERVICE IF EXISTS AGEDCARE.AGEDCARE.{job_name}", session)
-                    
-                    with st.spinner("Executing SPCS evaluation job..."):
-                        job_sql = f"""
-                        EXECUTE JOB SERVICE
-                        IN COMPUTE POOL FULLSTACK_COMPUTE_POOL
-                        FROM @AGEDCARE.AGEDCARE.DRI_EVAL_STAGE
-                        SPEC = 'job-run-spec.yaml'
-                        NAME = AGEDCARE.AGEDCARE.{job_name}
-                        QUERY_WAREHOUSE = COMPUTE_WH
-                        EXTERNAL_ACCESS_INTEGRATIONS = (PYPI_ACCESS_INTEGRATION)
-                        """
-                        
-                        result = execute_query(job_sql, session)
-                        
-                        if result:
-                            status = str(result[0]) if result[0] else 'Unknown'
-                            
-                            if 'DONE' in status.upper() or 'completed' in status.lower():
-                                st.success(f"""
-                                ✅ Evaluation job completed!
-                                
-                                **View results in Snowsight:**
-                                AI & ML > Evaluations > DRI_INTELLIGENCE_AGENT
-                                
-                                Run name: `{eval_run_name}` (or spec default)
-                                """)
-                            else:
-                                st.info(f"Job status: {status}")
-                        else:
-                            st.warning("Job started. Check Snowsight > AI & ML > Evaluations for results.")
-                            
-                except Exception as e:
-                    st.error(f"Failed: {e}")
-                    st.warning("Ensure SPCS container is deployed. See evaluation_job/README.md")
+    run_button = st.button("🧪 Run Single Analysis", type="primary", use_container_width=True, help="Test prompt on selected resident")
     
     if run_button:
         with st.spinner(f"Analyzing resident {selected_resident} with {selected_model}..."):
@@ -260,16 +202,26 @@ if session:
                     SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as forms_text
                     FROM (SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 20)
                 ),
-                rag_indicators AS (
-                    SELECT LISTAGG(INDICATOR_ID || ' - ' || INDICATOR_NAME || ': ' || DEFINITION, ' || ') WITHIN GROUP (ORDER BY INDICATOR_ID) as indicators_text
-                    FROM AGEDCARE.AGEDCARE.DRI_RAG_INDICATORS
+                resident_medical_profile AS (
+                    SELECT COALESCE(SPECIAL_NEEDS, '') || ' | Allergies: ' || COALESCE(ALLERGIES, 'None') || ' | Diet: ' || COALESCE(DIET, 'Standard') as profile_text
+                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {selected_resident}
+                ),
+                resident_obs_groups AS (
+                    SELECT LISTAGG(CHART_NAME || ' (' || OBSERVATION_STATUS || '): ' || OBSERVATION_TYPE || ' - ' || OBSERVATION_LOCATION || ' - ' || COALESCE(OBSERVATION_DESCRIPTION, ''), ' | ') as obs_groups_text
+                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
+                ),
+                clinical_rules AS (
+                    SELECT LISTAGG(DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || ': ' || ARRAY_TO_STRING(KEYWORDS, ','), ' || ') WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
+                    FROM AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST
                 )
                 SELECT 
                     LENGTH(COALESCE((SELECT notes_text FROM resident_notes), '')) +
                     LENGTH(COALESCE((SELECT meds_text FROM resident_meds), '')) +
                     LENGTH(COALESCE((SELECT obs_text FROM resident_obs), '')) +
                     LENGTH(COALESCE((SELECT forms_text FROM resident_forms), '')) +
-                    LENGTH(COALESCE((SELECT indicators_text FROM rag_indicators), '')) as TOTAL_CONTEXT_LENGTH
+                    LENGTH(COALESCE((SELECT profile_text FROM resident_medical_profile), '')) +
+                    LENGTH(COALESCE((SELECT obs_groups_text FROM resident_obs_groups), '')) +
+                    LENGTH(COALESCE((SELECT rules_text FROM clinical_rules), '')) as TOTAL_CONTEXT_LENGTH
                 """
                 
                 size_result = execute_query(context_size_query, session)
@@ -309,17 +261,27 @@ if session:
                     SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as forms_text
                     FROM (SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 20)
                 ),
-                rag_indicators AS (
-                    SELECT LISTAGG(INDICATOR_ID || ' - ' || INDICATOR_NAME || ': ' || DEFINITION, ' || ') WITHIN GROUP (ORDER BY INDICATOR_ID) as indicators_text
-                    FROM AGEDCARE.AGEDCARE.DRI_RAG_INDICATORS
+                resident_medical_profile AS (
+                    SELECT COALESCE(SPECIAL_NEEDS, '') || ' | Allergies: ' || COALESCE(ALLERGIES, 'None') || ' | Diet: ' || COALESCE(DIET, 'Standard') as profile_text
+                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {selected_resident}
+                ),
+                resident_obs_groups AS (
+                    SELECT LISTAGG(CHART_NAME || ' (' || OBSERVATION_STATUS || '): ' || OBSERVATION_TYPE || ' - ' || OBSERVATION_LOCATION || ' - ' || COALESCE(OBSERVATION_DESCRIPTION, ''), ' | ') as obs_groups_text
+                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
+                ),
+                clinical_rules AS (
+                    SELECT LISTAGG(DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || ': ' || ARRAY_TO_STRING(KEYWORDS, ','), ' || ') WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
+                    FROM AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST
                 ),
                 full_context AS (
                     SELECT 
-                        'PROGRESS NOTES: ' || (SELECT notes_text FROM resident_notes) ||
-                        ' MEDICATIONS: ' || (SELECT meds_text FROM resident_meds) ||
-                        ' OBSERVATIONS: ' || (SELECT obs_text FROM resident_obs) ||
-                        ' ASSESSMENT FORMS: ' || (SELECT forms_text FROM resident_forms) ||
-                        ' DRI INDICATORS TO CHECK: ' || (SELECT indicators_text FROM rag_indicators) as context
+                        'MEDICAL PROFILE (DIAGNOSES - PRIMARY SOURCE): ' || COALESCE((SELECT profile_text FROM resident_medical_profile), 'None') ||
+                        ' PROGRESS NOTES: ' || COALESCE((SELECT notes_text FROM resident_notes), 'None') ||
+                        ' MEDICATIONS: ' || COALESCE((SELECT meds_text FROM resident_meds), 'None') ||
+                        ' OBSERVATIONS: ' || COALESCE((SELECT obs_text FROM resident_obs), 'None') ||
+                        ' OBSERVATION GROUPS (Wounds/Pain Charts): ' || COALESCE((SELECT obs_groups_text FROM resident_obs_groups), 'None') ||
+                        ' ASSESSMENT FORMS: ' || COALESCE((SELECT forms_text FROM resident_forms), 'None') ||
+                        ' CLINICAL DRI DETECTION RULES (use these keywords to identify deficits): ' || COALESCE((SELECT rules_text FROM clinical_rules), 'None') as context
                 ),
                 prompt_template AS (
                     SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'
@@ -480,7 +442,7 @@ if session:
                 st.error(f"Analysis failed: {e}")
     
     st.markdown("---")
-    st.caption("💡 **Tip:** Use 'Run Single Analysis' to test prompts quickly. Use 'Run Evaluation' to create traceable evaluations in Snowsight > AI & ML > Evaluations.")
+    st.caption("💡 **Tip:** Use 'Run Single Analysis' to test prompts. Use 'Batch Testing' page for multi-resident tests with quality metrics.")
 
 else:
     st.error("Failed to connect to Snowflake")
