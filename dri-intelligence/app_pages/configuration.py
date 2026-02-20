@@ -19,6 +19,7 @@ This is the **administration hub** for configuring the DRI Intelligence system. 
 | **Form Mappings** | See how client-specific form fields map to DRI indicators |
 | **Indicator Overrides** | Client-specific customizations to indicator behavior |
 | **RAG Indicators** | Browse all 33 DRI indicator definitions (the knowledge base) |
+| **Clinical Detection Rules** | View/edit keyword rules used by LLM to identify deficits |
 | **Processing Settings** | **Configure production model, prompt, and batch schedule** |
 
 ### Processing Settings (Most Important)
@@ -64,7 +65,7 @@ This tab controls what runs during **nightly batch processing**:
     
     st.warning("**Sample data:** The configuration below is mocked for demonstration. Modify these mappings to match your client's specific system.", icon=":material/warning:")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Client config", "Form mappings", "Indicator overrides", "RAG indicators", "Processing settings"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Client config", "Form mappings", "Indicator overrides", "RAG indicators", "Clinical detection rules", "Processing settings"])
     
     with tab1:
         st.subheader("Client configuration")
@@ -190,6 +191,76 @@ This tab controls what runs during **nightly batch processing**:
             st.info("No indicators found", icon=":material/info:")
 
     with tab5:
+        st.subheader("Clinical detection rules")
+        st.caption("These keyword rules from DRI_KEYWORD_MASTER_LIST are injected into the LLM prompt to guide deficit identification.")
+        
+        st.info("💡 **How this works:** When the LLM analyzes a resident, it receives these rules to help identify which DRI deficits are present. Keywords are matched against progress notes, observations, medications, and other clinical data.", icon=":material/lightbulb:")
+        
+        clinical_rules = execute_query_df("""
+            SELECT DRI_DEFICIT_ID, DEFICIT_NAME, ARRAY_TO_STRING(KEYWORDS, ', ') as KEYWORDS_TEXT,
+                   ARRAY_SIZE(KEYWORDS) as KEYWORD_COUNT
+            FROM AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST
+            ORDER BY DRI_DEFICIT_ID
+        """, session)
+        
+        if clinical_rules is not None and len(clinical_rules) > 0:
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                st.metric("Total deficits", len(clinical_rules))
+            with col_m2:
+                total_keywords = clinical_rules['KEYWORD_COUNT'].sum()
+                st.metric("Total keywords", int(total_keywords))
+            with col_m3:
+                avg_keywords = clinical_rules['KEYWORD_COUNT'].mean()
+                st.metric("Avg keywords/deficit", f"{avg_keywords:.1f}")
+            
+            st.dataframe(
+                clinical_rules[['DRI_DEFICIT_ID', 'DEFICIT_NAME', 'KEYWORDS_TEXT', 'KEYWORD_COUNT']],
+                use_container_width=True,
+                column_config={
+                    'DRI_DEFICIT_ID': st.column_config.TextColumn('Deficit ID', width='small'),
+                    'DEFICIT_NAME': st.column_config.TextColumn('Deficit Name', width='medium'),
+                    'KEYWORDS_TEXT': st.column_config.TextColumn('Keywords', width='large'),
+                    'KEYWORD_COUNT': st.column_config.NumberColumn('Count', width='small')
+                }
+            )
+            
+            st.subheader("Edit detection rules")
+            selected_deficit = st.selectbox(
+                "Select deficit to edit",
+                clinical_rules['DRI_DEFICIT_ID'].tolist(),
+                format_func=lambda x: f"{x} - {clinical_rules[clinical_rules['DRI_DEFICIT_ID']==x]['DEFICIT_NAME'].iloc[0]}"
+            )
+            
+            if selected_deficit:
+                current_row = clinical_rules[clinical_rules['DRI_DEFICIT_ID'] == selected_deficit].iloc[0]
+                st.markdown(f"**Current keywords for {current_row['DEFICIT_NAME']}:**")
+                
+                current_keywords = current_row['KEYWORDS_TEXT']
+                new_keywords = st.text_area(
+                    "Keywords (comma-separated)",
+                    value=current_keywords,
+                    height=100,
+                    help="Enter keywords separated by commas. These will be used by the LLM to identify this deficit."
+                )
+                
+                if st.button("💾 Save keyword changes", key="save_keywords"):
+                    try:
+                        keywords_list = [k.strip() for k in new_keywords.split(',') if k.strip()]
+                        keywords_array = "ARRAY_CONSTRUCT('" + "', '".join(keywords_list) + "')"
+                        execute_query(f"""
+                            UPDATE AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST 
+                            SET KEYWORDS = {keywords_array}
+                            WHERE DRI_DEFICIT_ID = '{selected_deficit}'
+                        """, session)
+                        st.success(f"Updated keywords for {selected_deficit}", icon=":material/check_circle:")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to save: {e}", icon=":material/error:")
+        else:
+            st.warning("No clinical detection rules found in DRI_KEYWORD_MASTER_LIST", icon=":material/warning:")
+
+    with tab6:
         st.subheader("Processing settings")
         st.caption("All production settings for nightly batch processing are stored per-client in this table. The batch job reads this configuration directly.")
         

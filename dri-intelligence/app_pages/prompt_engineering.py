@@ -105,7 +105,13 @@ if session:
         else:
             selected_version = "v1.0"
         
-        if st.button("📖 View resident context", use_container_width=True):
+        col_ctx1, col_ctx2 = st.columns(2)
+        with col_ctx1:
+            view_context_btn = st.button("📖 View resident data", use_container_width=True)
+        with col_ctx2:
+            preview_prompt_btn = st.button("👁️ Preview full prompt", use_container_width=True, help="See exactly what gets sent to the LLM")
+        
+        if view_context_btn:
             with st.spinner("Loading..."):
                 context_query = f"""
                     WITH notes AS (
@@ -138,6 +144,68 @@ if session:
                 result = execute_query(context_query, session)
                 if result:
                     st.text_area("Resident context preview", result[0]['CONTEXT'], height=250)
+        
+        if preview_prompt_btn:
+            with st.spinner("Building full prompt..."):
+                full_prompt_query = f"""
+                    WITH resident_notes AS (
+                        SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400) || ' [' || NOTE_TYPE || ']', ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as notes_text
+                        FROM (SELECT PROGRESS_NOTE, NOTE_TYPE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 15)
+                    ),
+                    resident_meds AS (
+                        SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as meds_text
+                        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
+                    ),
+                    resident_obs AS (
+                        SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as obs_text
+                        FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
+                    ),
+                    resident_forms AS (
+                        SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as forms_text
+                        FROM (SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 20)
+                    ),
+                    resident_medical_profile AS (
+                        SELECT COALESCE(SPECIAL_NEEDS, '') || ' | Allergies: ' || COALESCE(ALLERGIES, 'None') || ' | Diet: ' || COALESCE(DIET, 'Standard') as profile_text
+                        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {selected_resident}
+                    ),
+                    resident_obs_groups AS (
+                        SELECT LISTAGG(CHART_NAME || ' (' || OBSERVATION_STATUS || '): ' || COALESCE(OBSERVATION_TYPE, '') || ' - ' || COALESCE(OBSERVATION_LOCATION, '') || ' - ' || COALESCE(OBSERVATION_DESCRIPTION, ''), ' | ') as obs_groups_text
+                        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
+                    ),
+                    clinical_rules AS (
+                        SELECT LISTAGG(DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || ': ' || ARRAY_TO_STRING(KEYWORDS, ','), ' || ') WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
+                        FROM AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST
+                    ),
+                    full_context AS (
+                        SELECT 
+                            'MEDICAL PROFILE (DIAGNOSES - PRIMARY SOURCE): ' || COALESCE((SELECT profile_text FROM resident_medical_profile), 'None') ||
+                            ' PROGRESS NOTES: ' || COALESCE((SELECT notes_text FROM resident_notes), 'None') ||
+                            ' MEDICATIONS: ' || COALESCE((SELECT meds_text FROM resident_meds), 'None') ||
+                            ' OBSERVATIONS: ' || COALESCE((SELECT obs_text FROM resident_obs), 'None') ||
+                            ' OBSERVATION GROUPS (Wounds/Pain Charts): ' || COALESCE((SELECT obs_groups_text FROM resident_obs_groups), 'None') ||
+                            ' ASSESSMENT FORMS: ' || COALESCE((SELECT forms_text FROM resident_forms), 'None') ||
+                            ' CLINICAL DRI DETECTION RULES (use these keywords to identify deficits): ' || COALESCE((SELECT rules_text FROM clinical_rules), 'None') as context
+                    ),
+                    prompt_template AS (
+                        SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'
+                    )
+                    SELECT 
+                        REPLACE(REPLACE(
+                            (SELECT PROMPT_TEXT FROM prompt_template),
+                            '{{resident_context}}', (SELECT context FROM full_context)
+                        ), '{{rag_indicator_context}}', '') as FULL_PROMPT,
+                        LENGTH(REPLACE(REPLACE(
+                            (SELECT PROMPT_TEXT FROM prompt_template),
+                            '{{resident_context}}', (SELECT context FROM full_context)
+                        ), '{{rag_indicator_context}}', '')) as PROMPT_LENGTH
+                """
+                result = execute_query(full_prompt_query, session)
+                if result:
+                    full_prompt = result[0]['FULL_PROMPT']
+                    prompt_length = result[0]['PROMPT_LENGTH']
+                    st.success(f"Full prompt length: {prompt_length:,} characters")
+                    st.text_area("Full prompt (exactly what gets sent to LLM)", full_prompt, height=400)
+                    st.info("💡 This is the complete prompt with all placeholders resolved. Copy this to test in other environments.")
     
     with col2:
         st.subheader("Prompt template")
