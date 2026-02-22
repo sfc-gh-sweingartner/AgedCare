@@ -192,74 +192,146 @@ This tab controls what runs during **nightly batch processing**:
 
     with tab5:
         st.subheader("Clinical detection rules")
-        st.caption("These keyword rules from DRI_KEYWORD_MASTER_LIST are injected into the LLM prompt to guide deficit identification.")
         
-        st.info("💡 **How this works:** When the LLM analyzes a resident, it receives these rules to help identify which DRI deficits are present. Keywords are matched against progress notes, observations, medications, and other clinical data.", icon=":material/lightbulb:")
+        with st.container(border=True):
+            st.warning("""
+**⚠️ Outstanding Requirements (5 items not yet implemented):**
+
+| # | Requirement | Status |
+|---|-------------|--------|
+| 1 | **Audit Tables** - Rule applications, scoring decisions, explainability tracking | 🔴 Pending |
+| 2 | **Daily Delta Processing** - Incremental updates with temporal logic (expiry/re-trigger) | 🔴 Pending |
+| 3 | **Version Controlled Config** - Client-specific rules updates without code changes | 🟡 Partial |
+| 4 | **Data Lineage Tracking** - Full traceability from source to output | 🔴 Pending |
+| 5 | **Orchestration Framework** - Scheduled tasks for daily processing | 🔴 Pending |
+
+*These requirements are documented in the Functional Design v1.9 Appendix B.6*
+            """, icon=":material/pending_actions:")
         
-        clinical_rules = execute_query_df("""
-            SELECT DRI_DEFICIT_ID, DEFICIT_NAME, ARRAY_TO_STRING(KEYWORDS, ', ') as KEYWORDS_TEXT,
-                   ARRAY_SIZE(KEYWORDS) as KEYWORD_COUNT
-            FROM AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST
+        st.caption("Business rules define how deficits are detected. Includes rule types (keyword, specific_value, aggregation), temporal logic, and thresholds.")
+        
+        business_rules = execute_query_df("""
+            SELECT DRI_DEFICIT_ID, DEFICIT_NAME, DOMAIN, DEFICIT_TYPE, 
+                   EXPIRY_DAYS, LOOKBACK_DAYS_HISTORIC, 
+                   ARRAY_SIZE(RULES_JSON) as RULE_COUNT,
+                   RULES_JSON
+            FROM AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES
             ORDER BY DRI_DEFICIT_ID
         """, session)
         
-        if clinical_rules is not None and len(clinical_rules) > 0:
-            col_m1, col_m2, col_m3 = st.columns(3)
+        if business_rules is not None and len(business_rules) > 0:
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
             with col_m1:
-                st.metric("Total deficits", len(clinical_rules))
+                st.metric("Total deficits", len(business_rules))
             with col_m2:
-                total_keywords = clinical_rules['KEYWORD_COUNT'].sum()
-                st.metric("Total keywords", int(total_keywords))
+                total_rules = business_rules['RULE_COUNT'].sum()
+                st.metric("Total rules", int(total_rules))
             with col_m3:
-                avg_keywords = clinical_rules['KEYWORD_COUNT'].mean()
-                st.metric("Avg keywords/deficit", f"{avg_keywords:.1f}")
+                persistent = len(business_rules[business_rules['DEFICIT_TYPE'] == 'PERSISTENT'])
+                st.metric("Persistent", persistent)
+            with col_m4:
+                fluctuating = len(business_rules[business_rules['DEFICIT_TYPE'] == 'FLUCTUATING'])
+                st.metric("Fluctuating", fluctuating)
+            
+            type_filter = st.selectbox("Filter by type", ["All", "PERSISTENT", "FLUCTUATING"], key="br_type_filter")
+            domain_filter = st.selectbox("Filter by domain", ["All"] + sorted(business_rules['DOMAIN'].unique().tolist()), key="br_domain_filter")
+            
+            filtered_rules = business_rules.copy()
+            if type_filter != "All":
+                filtered_rules = filtered_rules[filtered_rules['DEFICIT_TYPE'] == type_filter]
+            if domain_filter != "All":
+                filtered_rules = filtered_rules[filtered_rules['DOMAIN'] == domain_filter]
             
             st.dataframe(
-                clinical_rules[['DRI_DEFICIT_ID', 'DEFICIT_NAME', 'KEYWORDS_TEXT', 'KEYWORD_COUNT']],
+                filtered_rules[['DRI_DEFICIT_ID', 'DEFICIT_NAME', 'DOMAIN', 'DEFICIT_TYPE', 'EXPIRY_DAYS', 'LOOKBACK_DAYS_HISTORIC', 'RULE_COUNT']],
                 use_container_width=True,
                 column_config={
-                    'DRI_DEFICIT_ID': st.column_config.TextColumn('Deficit ID', width='small'),
+                    'DRI_DEFICIT_ID': st.column_config.TextColumn('ID', width='small'),
                     'DEFICIT_NAME': st.column_config.TextColumn('Deficit Name', width='medium'),
-                    'KEYWORDS_TEXT': st.column_config.TextColumn('Keywords', width='large'),
-                    'KEYWORD_COUNT': st.column_config.NumberColumn('Count', width='small')
+                    'DOMAIN': st.column_config.TextColumn('Domain', width='medium'),
+                    'DEFICIT_TYPE': st.column_config.TextColumn('Type', width='small'),
+                    'EXPIRY_DAYS': st.column_config.NumberColumn('Expiry Days', width='small'),
+                    'LOOKBACK_DAYS_HISTORIC': st.column_config.TextColumn('Lookback', width='small'),
+                    'RULE_COUNT': st.column_config.NumberColumn('Rules', width='small')
                 }
             )
             
-            st.subheader("Edit detection rules")
-            selected_deficit = st.selectbox(
-                "Select deficit to edit",
-                clinical_rules['DRI_DEFICIT_ID'].tolist(),
-                format_func=lambda x: f"{x} - {clinical_rules[clinical_rules['DRI_DEFICIT_ID']==x]['DEFICIT_NAME'].iloc[0]}"
+            st.subheader("Rule details")
+            selected_deficit_br = st.selectbox(
+                "Select deficit to view full rules",
+                filtered_rules['DRI_DEFICIT_ID'].tolist(),
+                format_func=lambda x: f"{x} - {filtered_rules[filtered_rules['DRI_DEFICIT_ID']==x]['DEFICIT_NAME'].iloc[0]}",
+                key="br_detail_select"
             )
             
-            if selected_deficit:
-                current_row = clinical_rules[clinical_rules['DRI_DEFICIT_ID'] == selected_deficit].iloc[0]
-                st.markdown(f"**Current keywords for {current_row['DEFICIT_NAME']}:**")
+            if selected_deficit_br:
+                deficit_row = filtered_rules[filtered_rules['DRI_DEFICIT_ID'] == selected_deficit_br].iloc[0]
                 
-                current_keywords = current_row['KEYWORDS_TEXT']
-                new_keywords = st.text_area(
-                    "Keywords (comma-separated)",
-                    value=current_keywords,
-                    height=100,
-                    help="Enter keywords separated by commas. These will be used by the LLM to identify this deficit."
-                )
-                
-                if st.button("💾 Save keyword changes", key="save_keywords"):
+                with st.container(border=True):
+                    st.markdown(f"### {deficit_row['DEFICIT_NAME']} ({deficit_row['DRI_DEFICIT_ID']})")
+                    
+                    col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+                    with col_d1:
+                        if deficit_row['DEFICIT_TYPE'] == 'PERSISTENT':
+                            st.badge("PERSISTENT", icon=":material/all_inclusive:", color="blue")
+                        else:
+                            st.badge("FLUCTUATING", icon=":material/timelapse:", color="orange")
+                    with col_d2:
+                        st.markdown(f"**Domain:** {deficit_row['DOMAIN']}")
+                    with col_d3:
+                        expiry = deficit_row['EXPIRY_DAYS']
+                        st.markdown(f"**Expiry:** {expiry if expiry > 0 else 'Never'} days")
+                    with col_d4:
+                        st.markdown(f"**Lookback:** {deficit_row['LOOKBACK_DAYS_HISTORIC']}")
+                    
+                    st.markdown("---")
+                    st.markdown(f"**Rules ({deficit_row['RULE_COUNT']} total):**")
+                    
                     try:
-                        keywords_list = [k.strip() for k in new_keywords.split(',') if k.strip()]
-                        keywords_array = "ARRAY_CONSTRUCT('" + "', '".join(keywords_list) + "')"
-                        execute_query(f"""
-                            UPDATE AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST 
-                            SET KEYWORDS = {keywords_array}
-                            WHERE DRI_DEFICIT_ID = '{selected_deficit}'
-                        """, session)
-                        st.success(f"Updated keywords for {selected_deficit}", icon=":material/check_circle:")
-                        st.rerun()
+                        rules_json = deficit_row['RULES_JSON']
+                        if isinstance(rules_json, str):
+                            rules_json = json.loads(rules_json)
+                        
+                        for i, rule in enumerate(rules_json):
+                            with st.expander(f"Rule {rule.get('rule_number', i+1)}: {rule.get('rule_description', 'N/A')}", expanded=i==0):
+                                rule_cols = st.columns([1, 1, 1])
+                                with rule_cols[0]:
+                                    rule_type = rule.get('rule_type', 'unknown')
+                                    if rule_type == 'keyword_search':
+                                        st.badge("keyword_search", icon=":material/search:", color="green")
+                                    elif rule_type == 'specific_value':
+                                        st.badge("specific_value", icon=":material/check_box:", color="blue")
+                                    elif rule_type == 'aggregation':
+                                        st.badge("aggregation", icon=":material/functions:", color="purple")
+                                    else:
+                                        st.badge(rule_type, color="gray")
+                                with rule_cols[1]:
+                                    st.markdown(f"**Source:** `{rule.get('source_type', 'N/A')}`")
+                                with rule_cols[2]:
+                                    st.markdown(f"**Threshold:** {rule.get('threshold', 1)}")
+                                
+                                functions = rule.get('functions', [])
+                                if functions:
+                                    st.markdown("**Functions:**")
+                                    for func in functions:
+                                        func_type = func.get('function_type', '')
+                                        key = func.get('key', '')
+                                        value = func.get('value', '')
+                                        if func_type == 'inclusion_filter':
+                                            st.markdown(f"- ✅ Include: `{key}` = `{value}`")
+                                        elif func_type == 'exclusion_filter':
+                                            st.markdown(f"- ❌ Exclude: `{key}` = `{value}`")
+                                        elif func_type == 'aggregation':
+                                            st.markdown(f"- 📊 Aggregate: `{key}` → `{value}`")
+                                
+                                st.markdown("**Full rule JSON:**")
+                                st.json(rule)
                     except Exception as e:
-                        st.error(f"Failed to save: {e}", icon=":material/error:")
+                        st.error(f"Error parsing rules: {e}")
+                        st.json(deficit_row['RULES_JSON'])
         else:
-            st.warning("No clinical detection rules found in DRI_KEYWORD_MASTER_LIST", icon=":material/warning:")
-
+            st.info("No business rules found in DRI_BUSINESS_RULES table. Loading from JSON template may be required.", icon=":material/info:")
+            
     with tab6:
         st.subheader("Processing settings")
         st.caption("All production settings for nightly batch processing are stored per-client in this table. The batch job reads this configuration directly.")
@@ -285,6 +357,7 @@ This tab controls what runs during **nightly batch processing**:
         st.caption(f"Current production model: **{prod_model}**")
         
         model_options = [
+            'claude-sonnet-4-6',
             'claude-sonnet-4-5',
             'claude-opus-4-5',
             'claude-haiku-4-5',

@@ -213,21 +213,94 @@ if session:
                         except:
                             response_text = raw_response
                         
+                        cleaned = response_text.strip()
+                        if cleaned.startswith('```json'):
+                            cleaned = cleaned[7:]
+                        elif cleaned.startswith('```'):
+                            cleaned = cleaned[3:]
+                        if cleaned.endswith('```'):
+                            cleaned = cleaned[:-3]
+                        cleaned = cleaned.strip()
+                        
+                        json_start = cleaned.find('{')
+                        json_end = cleaned.rfind('}') + 1
+                        if json_start >= 0 and json_end > json_start:
+                            json_str = cleaned[json_start:json_end]
+                        else:
+                            json_str = cleaned
+                        
+                        escaped_json = json_str.replace("'", "''").replace("\\", "\\\\")
                         insert_query = f"""
                             INSERT INTO AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
                             (RESIDENT_ID, CLIENT_SYSTEM_KEY, MODEL_USED, PROMPT_VERSION, 
                              RAW_RESPONSE, PROCESSING_TIME_MS, BATCH_RUN_ID)
-                            VALUES (
+                            SELECT 
                                 {resident_id},
                                 '{selected_client_key}',
                                 '{prod_model}',
                                 '{prod_prompt_version}',
-                                PARSE_JSON($${json.dumps({"response": response_text})}$$),
+                                TRY_PARSE_JSON('{escaped_json}'),
                                 {processing_time},
                                 '{batch_id}'
-                            )
                         """
                         execute_query(insert_query, session)
+                        
+                        analysis_id_result = execute_query(f"""
+                            SELECT ANALYSIS_ID FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
+                            WHERE RESIDENT_ID = {resident_id} AND BATCH_RUN_ID = '{batch_id}'
+                            ORDER BY ANALYSIS_TIMESTAMP DESC LIMIT 1
+                        """, session)
+                        
+                        if analysis_id_result:
+                            analysis_id = analysis_id_result[0]['ANALYSIS_ID']
+                            
+                            try:
+                                parsed_response = json.loads(json_str)
+                                indicators = parsed_response.get('indicators', [])
+                                summary = parsed_response.get('summary', {})
+                                
+                                indicators_detected = len([i for i in indicators if i.get('detected', True)])
+                                indicators_cleared = summary.get('indicators_cleared', 0) or 0
+                                
+                                proposed_score = round(indicators_detected / 33, 4)
+                                if proposed_score <= 0.2:
+                                    severity = 'Low'
+                                elif proposed_score <= 0.4:
+                                    severity = 'Medium'
+                                elif proposed_score <= 0.6:
+                                    severity = 'High'
+                                else:
+                                    severity = 'Very High'
+                                
+                                indicator_changes = json.dumps(indicators)
+                                escaped_changes = indicator_changes.replace("'", "''")
+                                change_summary = summary.get('analysis_notes', f'Detected {indicators_detected} indicators')[:500]
+                                escaped_summary = change_summary.replace("'", "''")
+                                
+                                queue_insert = f"""
+                                    INSERT INTO AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE 
+                                    (ANALYSIS_ID, RESIDENT_ID, CLIENT_SYSTEM_KEY, 
+                                     CURRENT_DRI_SCORE, PROPOSED_DRI_SCORE,
+                                     CURRENT_SEVERITY_BAND, PROPOSED_SEVERITY_BAND,
+                                     INDICATORS_ADDED, INDICATORS_REMOVED,
+                                     INDICATOR_CHANGES_JSON, CHANGE_SUMMARY, STATUS)
+                                    SELECT
+                                        '{analysis_id}',
+                                        {resident_id},
+                                        '{selected_client_key}',
+                                        0.0,
+                                        {proposed_score},
+                                        'Unknown',
+                                        '{severity}',
+                                        {indicators_detected},
+                                        {indicators_cleared},
+                                        TRY_PARSE_JSON('{escaped_changes}'),
+                                        '{escaped_summary}',
+                                        'PENDING'
+                                """
+                                execute_query(queue_insert, session)
+                            except Exception as queue_err:
+                                pass
                         
                         results.append({
                             "resident_id": resident_id,
@@ -308,6 +381,32 @@ if session:
             """)
         
         st.markdown("---")
+        
+        st.subheader("Analysis Overview")
+        overview_data = execute_query_df("""
+            SELECT 
+                lla.PROMPT_VERSION,
+                COUNT(*) as TOTAL_ANALYSES,
+                COUNT(CASE WHEN rq.STATUS = 'PENDING' THEN 1 END) as PENDING_REVIEW,
+                COUNT(CASE WHEN rq.STATUS = 'APPROVED' THEN 1 END) as APPROVED,
+                COUNT(CASE WHEN rq.STATUS = 'REJECTED' THEN 1 END) as REJECTED,
+                COUNT(DISTINCT lla.RESIDENT_ID) as RESIDENTS,
+                ROUND(AVG(lla.PROCESSING_TIME_MS), 0) as AVG_PROCESSING_MS,
+                MAX(lla.ANALYSIS_TIMESTAMP) as LAST_RUN
+            FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla
+            LEFT JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq 
+                ON lla.ANALYSIS_ID = rq.ANALYSIS_ID
+            GROUP BY lla.PROMPT_VERSION
+            ORDER BY LAST_RUN DESC
+        """, session)
+        
+        if overview_data is not None and len(overview_data) > 0:
+            st.dataframe(overview_data, use_container_width=True)
+        else:
+            st.info("No analysis data yet. Run a batch test to get started.", icon=":material/info:")
+        
+        st.markdown("---")
+        st.subheader("Approval Rate by Prompt Version")
         
         quality_data = execute_query_df("""
             SELECT 

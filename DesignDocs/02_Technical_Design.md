@@ -240,13 +240,26 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE (
     INDICATORS_REMOVED NUMBER,
     INDICATOR_CHANGES_JSON VARIANT,
     CHANGE_SUMMARY VARCHAR(16777216),
-    STATUS VARCHAR(32) DEFAULT 'PENDING',
+    STATUS VARCHAR(32) DEFAULT 'PENDING',  -- PENDING, APPROVED, REJECTED, PARTIAL_REJECT
     REVIEWER_USER VARCHAR(256),
-    REVIEWER_NOTES VARCHAR(16777216),
-    EXCLUDED_INDICATORS VARIANT,
+    REVIEWER_NOTES VARCHAR(16777216),      -- Auto-generated summary of rejection reasons
+    EXCLUDED_INDICATORS VARIANT,            -- Array of rejected indicator IDs
     REVIEW_TIMESTAMP TIMESTAMP_NTZ,
     CREATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     PRIMARY KEY (QUEUE_ID)
+);
+
+-- DRI Indicator Rejections (Granular rejection feedback for prompt improvement)
+-- Added v1.8 - Stores individual indicator rejection reasons
+CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS (
+    REJECTION_ID VARCHAR(36) DEFAULT UUID_STRING() PRIMARY KEY,
+    QUEUE_ID VARCHAR(36) NOT NULL,           -- Links to parent review queue item
+    INDICATOR_ID VARCHAR(64) NOT NULL,       -- e.g., RESP_01, CARD_02
+    INDICATOR_NAME VARCHAR(256),             -- Human-readable name
+    REJECTION_REASON VARCHAR(16777216),      -- Why this indicator was rejected
+    REJECTED_BY VARCHAR(256),                -- User who rejected
+    REJECTED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    FOREIGN KEY (QUEUE_ID) REFERENCES AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE(QUEUE_ID)
 );
 
 -- DRI Client Configuration (Multi-tenant - one config per end customer)
@@ -342,6 +355,50 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_AUDIT_LOG (
     CREATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     PRIMARY KEY (LOG_ID)
 );
+
+-- DRI Business Rules (v1.9 - Stores complex business rules for all 33 deficits)
+CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES (
+    DRI_DEFICIT_ID VARCHAR(10) NOT NULL,
+    DEFICIT_NAME VARCHAR(256) NOT NULL,
+    DOMAIN VARCHAR(64),
+    DEFICIT_TYPE VARCHAR(20) NOT NULL DEFAULT 'PERSISTENT',  -- PERSISTENT or FLUCTUATING
+    EXPIRY_DAYS NUMBER DEFAULT 0,
+    LOOKBACK_DAYS_HISTORIC VARCHAR(20) DEFAULT 'all',  -- 'all', or number like '1', '7', '90', '365'
+    RULES_JSON VARIANT NOT NULL,  -- Array of rule objects with rule_type, source_type, functions, threshold
+    KEYWORDS ARRAY,               -- Simple keyword list for display
+    IS_ACTIVE BOOLEAN DEFAULT TRUE,
+    CREATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    MODIFIED_TIMESTAMP TIMESTAMP_NTZ,
+    VERSION VARCHAR(32) DEFAULT 'v1.0',
+    PRIMARY KEY (DRI_DEFICIT_ID)
+);
+
+COMMENT ON TABLE AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES IS 
+'Complete business rules for 33 DRI deficits including rule types (keyword_search, specific_value, aggregation), 
+inclusion/exclusion filters, temporal logic, and thresholds. Replaces simple keyword lists.';
+
+-- DRI Rule State (v1.9 - Tracks current state per resident per rule)
+CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_RULE_STATE (
+    STATE_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
+    RESIDENT_ID NUMBER NOT NULL,
+    DEFICIT_ID VARCHAR(10) NOT NULL,
+    RULE_NUMBER NUMBER,
+    RULE_STATUS VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',  -- ACTIVE, EXPIRED, CLEARED
+    FIRST_TRIGGERED_DATE DATE,
+    LAST_TRIGGERED_DATE DATE,
+    EXPIRY_DATE DATE,
+    TRIGGER_COUNT NUMBER DEFAULT 1,
+    SOURCE_EVIDENCE VARIANT,  -- JSON array of source references
+    CREATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    MODIFIED_TIMESTAMP TIMESTAMP_NTZ,
+    PRIMARY KEY (STATE_ID),
+    UNIQUE (RESIDENT_ID, DEFICIT_ID, RULE_NUMBER)
+)
+CHANGE_TRACKING = TRUE;
+
+COMMENT ON TABLE AGEDCARE.AGEDCARE.DRI_RULE_STATE IS 
+'Tracks current and historical state for each resident+deficit+rule combination. 
+Supports FLUCTUATING deficits with temporal expiry logic.';
 ```
 
 ### 2.4 Quality Metrics Tables & Views
@@ -814,14 +871,20 @@ dri-intelligence/
 ### 5.3 Page 3: Review Queue
 
 ```python
-# Review Queue Features:
+# Review Queue Features (Updated v1.8):
 # - Aggregate view: One row per resident with DRI change summary
 # - Show: Current DRI Score → Proposed DRI Score
 # - Show: Current Severity Band → Proposed Severity Band  
 # - Expandable detail: All indicator changes with evidence
-# - Single approve/reject per resident
-# - Bulk approve for high-confidence items
-# - Filter by severity change, date, confidence
+# - Approve All: Accept all detected indicators
+# - Reject Some...: Two-phase rejection workflow
+#   1. Click "Reject Some..." to enter rejection mode
+#   2. Select specific indicators via checkboxes
+#   3. Enter reason for each selected indicator (required)
+#   4. Submit rejections - creates DRI_INDICATOR_REJECTIONS records
+# - Status: PENDING, APPROVED, REJECTED, PARTIAL_REJECT
+# - View rejection details on already-rejected items
+# - Filter by status
 ```
 
 ### 5.4 Page 5: Configuration (Client Management) - IMPLEMENTED
@@ -1637,9 +1700,9 @@ The warehouse `MYWH` is used ONLY for:
 
 ---
 
-*Document Version: 1.7*  
+*Document Version: 1.9*  
 *Created: 2026-01-28*  
-*Updated: 2026-02-17*  
+*Updated: 2026-02-22*  
 *Status: Approved*
 
 ### Change Log
@@ -1653,3 +1716,5 @@ The warehouse `MYWH` is used ONLY for:
 | 1.5 | 2026-02-05 | UI improvements: Resident dropdown shows facility name, auto-select client config based on resident, Run Quality Evaluation button triggers SPCS job via EXECUTE JOB SERVICE, sample size selector added |
 | 1.6 | 2026-02-06 | AI Observability integration fixed: TruLens SDK patterns corrected (TruApp constructor uses positional arg, dataset_spec uses lowercase keys), Docker build requires `--platform linux/amd64` for SPCS, evaluation results now appear in Snowsight AI & ML > Evaluations, updated requirements.txt to use trulens-core>=2.1.2 |
 | 1.7 | 2026-02-17 | **Architecture Simplification**: Removed TruLens/AI Observability entirely. Replaced with approval-based quality metrics. Added V_PROMPT_QUALITY_SCORE, V_QUALITY_TREND, V_REJECTION_ANALYSIS views. Added HARVEST_GROUND_TRUTH_FROM_APPROVALS() procedure. Removed ai_observability.py, evaluation_job/ directory, and TruLens packages. |
+| 1.8 | 2026-02-18 | **Enhanced Rejection Workflow**: Added DRI_INDICATOR_REJECTIONS table for granular indicator-level rejection feedback. Review Queue now supports two-phase rejection: select indicators via checkboxes, provide reason for each. STATUS column includes PARTIAL_REJECT. Analysis Results shows full batch ID (not truncated). |
+| 1.9 | 2026-02-22 | **Business Rules Integration**: Added DRI_BUSINESS_RULES table for complete 33-deficit rule specifications (rule types, functions, temporal logic, thresholds). Added DRI_RULE_STATE table for tracking per-resident rule state with expiry logic. Updated configuration.py tab 5 to display full business rules. Added Outstanding Requirements indicator in UI. |

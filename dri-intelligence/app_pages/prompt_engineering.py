@@ -78,6 +78,7 @@ if session:
             selected_client = "DEMO_CLIENT_871"
         
         model_options = [
+            'claude-sonnet-4-6',
             'claude-sonnet-4-5',
             'claude-opus-4-5',
             'claude-haiku-4-5',
@@ -93,6 +94,7 @@ if session:
         selected_model = st.selectbox(
             "LLM model", 
             model_options, 
+            index=0,
             help="Cross-region inference enabled"
         )
         
@@ -173,18 +175,24 @@ if session:
                         FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
                     ),
                     clinical_rules AS (
-                        SELECT LISTAGG(DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || ': ' || ARRAY_TO_STRING(KEYWORDS, ','), ' || ') WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
-                        FROM AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST
+                        SELECT LISTAGG(
+                            DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || 
+                            ' [Type:' || DEFICIT_TYPE || ', Expiry:' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 'd, Lookback:' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') || ']' ||
+                            ' Keywords:' || COALESCE(ARRAY_TO_STRING(KEYWORDS, ','), 'N/A') ||
+                            ' Rules:' || COALESCE(TO_VARCHAR(RULES_JSON), '{{}}'),
+                            '\\n\\n'
+                        ) WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
+                        FROM AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES
+                        WHERE IS_ACTIVE = TRUE
                     ),
                     full_context AS (
                         SELECT 
                             'MEDICAL PROFILE (DIAGNOSES - PRIMARY SOURCE): ' || COALESCE((SELECT profile_text FROM resident_medical_profile), 'None') ||
-                            ' PROGRESS NOTES: ' || COALESCE((SELECT notes_text FROM resident_notes), 'None') ||
-                            ' MEDICATIONS: ' || COALESCE((SELECT meds_text FROM resident_meds), 'None') ||
-                            ' OBSERVATIONS: ' || COALESCE((SELECT obs_text FROM resident_obs), 'None') ||
-                            ' OBSERVATION GROUPS (Wounds/Pain Charts): ' || COALESCE((SELECT obs_groups_text FROM resident_obs_groups), 'None') ||
-                            ' ASSESSMENT FORMS: ' || COALESCE((SELECT forms_text FROM resident_forms), 'None') ||
-                            ' CLINICAL DRI DETECTION RULES (use these keywords to identify deficits): ' || COALESCE((SELECT rules_text FROM clinical_rules), 'None') as context
+                            '\\n\\nPROGRESS NOTES: ' || COALESCE((SELECT notes_text FROM resident_notes), 'None') ||
+                            '\\n\\nMEDICATIONS: ' || COALESCE((SELECT meds_text FROM resident_meds), 'None') ||
+                            '\\n\\nOBSERVATIONS: ' || COALESCE((SELECT obs_text FROM resident_obs), 'None') ||
+                            '\\n\\nOBSERVATION GROUPS (Wounds/Pain Charts): ' || COALESCE((SELECT obs_groups_text FROM resident_obs_groups), 'None') ||
+                            '\\n\\nASSESSMENT FORMS: ' || COALESCE((SELECT forms_text FROM resident_forms), 'None') as context
                     ),
                     prompt_template AS (
                         SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'
@@ -193,11 +201,11 @@ if session:
                         REPLACE(REPLACE(
                             (SELECT PROMPT_TEXT FROM prompt_template),
                             '{{resident_context}}', (SELECT context FROM full_context)
-                        ), '{{rag_indicator_context}}', '') as FULL_PROMPT,
+                        ), '{{rag_indicator_context}}', (SELECT rules_text FROM clinical_rules)) as FULL_PROMPT,
                         LENGTH(REPLACE(REPLACE(
                             (SELECT PROMPT_TEXT FROM prompt_template),
                             '{{resident_context}}', (SELECT context FROM full_context)
-                        ), '{{rag_indicator_context}}', '')) as PROMPT_LENGTH
+                        ), '{{rag_indicator_context}}', (SELECT rules_text FROM clinical_rules))) as PROMPT_LENGTH
                 """
                 result = execute_query(full_prompt_query, session)
                 if result:
@@ -279,8 +287,15 @@ if session:
                     FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
                 ),
                 clinical_rules AS (
-                    SELECT LISTAGG(DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || ': ' || ARRAY_TO_STRING(KEYWORDS, ','), ' || ') WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
-                    FROM AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST
+                    SELECT LISTAGG(
+                        DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || 
+                        ' [Type:' || DEFICIT_TYPE || ', Expiry:' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 'd, Lookback:' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') || ']' ||
+                        ' Keywords:' || COALESCE(ARRAY_TO_STRING(KEYWORDS, ','), 'N/A') ||
+                        ' Rules:' || COALESCE(TO_VARCHAR(RULES_JSON), '{{}}'),
+                        ' || '
+                    ) WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
+                    FROM AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES
+                    WHERE IS_ACTIVE = TRUE
                 )
                 SELECT 
                     LENGTH(COALESCE((SELECT notes_text FROM resident_notes), '')) +
@@ -338,18 +353,24 @@ if session:
                     FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
                 ),
                 clinical_rules AS (
-                    SELECT LISTAGG(DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || ': ' || ARRAY_TO_STRING(KEYWORDS, ','), ' || ') WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
-                    FROM AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST
+                    SELECT LISTAGG(
+                        DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || 
+                        ' [Type:' || DEFICIT_TYPE || ', Expiry:' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 'd, Lookback:' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') || ']' ||
+                        ' Keywords:' || COALESCE(ARRAY_TO_STRING(KEYWORDS, ','), 'N/A') ||
+                        ' Rules:' || COALESCE(TO_VARCHAR(RULES_JSON), '{{}}'),
+                        '\\n\\n'
+                    ) WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
+                    FROM AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES
+                    WHERE IS_ACTIVE = TRUE
                 ),
                 full_context AS (
                     SELECT 
                         'MEDICAL PROFILE (DIAGNOSES - PRIMARY SOURCE): ' || COALESCE((SELECT profile_text FROM resident_medical_profile), 'None') ||
-                        ' PROGRESS NOTES: ' || COALESCE((SELECT notes_text FROM resident_notes), 'None') ||
-                        ' MEDICATIONS: ' || COALESCE((SELECT meds_text FROM resident_meds), 'None') ||
-                        ' OBSERVATIONS: ' || COALESCE((SELECT obs_text FROM resident_obs), 'None') ||
-                        ' OBSERVATION GROUPS (Wounds/Pain Charts): ' || COALESCE((SELECT obs_groups_text FROM resident_obs_groups), 'None') ||
-                        ' ASSESSMENT FORMS: ' || COALESCE((SELECT forms_text FROM resident_forms), 'None') ||
-                        ' CLINICAL DRI DETECTION RULES (use these keywords to identify deficits): ' || COALESCE((SELECT rules_text FROM clinical_rules), 'None') as context
+                        '\\n\\nPROGRESS NOTES: ' || COALESCE((SELECT notes_text FROM resident_notes), 'None') ||
+                        '\\n\\nMEDICATIONS: ' || COALESCE((SELECT meds_text FROM resident_meds), 'None') ||
+                        '\\n\\nOBSERVATIONS: ' || COALESCE((SELECT obs_text FROM resident_obs), 'None') ||
+                        '\\n\\nOBSERVATION GROUPS (Wounds/Pain Charts): ' || COALESCE((SELECT obs_groups_text FROM resident_obs_groups), 'None') ||
+                        '\\n\\nASSESSMENT FORMS: ' || COALESCE((SELECT forms_text FROM resident_forms), 'None') as context
                 ),
                 prompt_template AS (
                     SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'
@@ -363,7 +384,7 @@ if session:
                                 'content': REPLACE(REPLACE(
                                     (SELECT PROMPT_TEXT FROM prompt_template),
                                     '{{resident_context}}', (SELECT context FROM full_context)
-                                ), '{{rag_indicator_context}}', '')
+                                ), '{{rag_indicator_context}}', (SELECT rules_text FROM clinical_rules))
                             }}
                         ],
                         {{

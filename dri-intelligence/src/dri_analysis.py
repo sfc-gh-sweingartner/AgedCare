@@ -57,6 +57,23 @@ def run_llm_analysis(session, resident_id: int, client_system_key: str, prompt_v
         if result:
             response_text = result[0]['RESPONSE']
             
+            cleaned = response_text.strip()
+            if cleaned.startswith('```json'):
+                cleaned = cleaned[7:]
+            elif cleaned.startswith('```'):
+                cleaned = cleaned[3:]
+            if cleaned.endswith('```'):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+            
+            json_start = cleaned.find('{')
+            json_end = cleaned.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                json_str = cleaned[json_start:json_end]
+            else:
+                json_str = cleaned
+            
+            escaped_json = json_str.replace("'", "''").replace("\\", "\\\\")
             session.sql(f"""
                 INSERT INTO AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
                 (RESIDENT_ID, CLIENT_SYSTEM_KEY, MODEL_USED, PROMPT_VERSION, RAW_RESPONSE, PROCESSING_TIME_MS)
@@ -65,7 +82,7 @@ def run_llm_analysis(session, resident_id: int, client_system_key: str, prompt_v
                     '{client_system_key}',
                     'claude-3-5-sonnet',
                     '{prompt_version or "v1.0"}',
-                    PARSE_JSON($${response_text}$$),
+                    TRY_PARSE_JSON('{escaped_json}'),
                     {processing_time_ms}
             """).collect()
             

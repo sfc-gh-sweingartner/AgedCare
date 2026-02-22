@@ -3,8 +3,6 @@ import json
 
 from src.connection_helper import get_snowflake_session, execute_query_df
 
-st.warning("**To be completed** - This page displays results from analyses run on the Prompt engineering page.", icon=":material/construction:")
-
 with st.expander("How to use this page", expanded=False, icon=":material/help:"):
     st.markdown("""
 ### Purpose
@@ -12,11 +10,11 @@ This page provides an **audit trail** of all LLM analyses run on residents. Use 
 
 ### How to Use
 1. **Filter by resident** to see analyses for a specific person
-2. **Adjust max results** to control how many records are shown
+2. **Filter by batch** to see results from a specific batch run
 3. **Expand each analysis** to see details:
    - Model used and prompt version
    - Processing time
-   - Full raw JSON response from the LLM
+   - Detected indicators with evidence
 
 ### Understanding the Data
 | Field | Description |
@@ -26,53 +24,12 @@ This page provides an **audit trail** of all LLM analyses run on residents. Use 
 | **Model Used** | Which LLM model processed the request |
 | **Prompt Version** | Which prompt template was used |
 | **Processing Time** | How long the analysis took (milliseconds) |
-| **Raw Response** | Complete JSON output from the AI |
+| **Indicators Detected** | Number of DRI indicators found |
 
 ### Tips
 - Compare responses across different models for the same resident
 - Use this page to verify evidence before approving changes in Review Queue
 - Processing times over 60 seconds may indicate context size issues
-- If results seem incomplete, the response may have been truncated (check Configuration for token settings)
-
-### Related Features
-- **Quality metrics** page shows aggregated quality scores for evaluations
-- **Snowsight AI Observability** provides deeper trace analysis (see Quality Metrics page for access instructions)
-    """)
-
-with st.expander("AI Observability in Snowsight", expanded=False, icon=":material/monitoring:"):
-    st.markdown("""
-### For Deeper Analysis
-
-While this page shows the raw LLM outputs, Snowflake's **AI Observability** feature in Snowsight provides additional capabilities:
-
-**Trace Analysis**
-- View the complete call chain for each analysis
-- See token counts, latency breakdown, and cost estimates
-- Drill down into individual prompt/completion pairs
-
-**How to Access**
-1. Log into **Snowsight** (your Snowflake web interface)
-2. Go to **Monitoring** → **AI Observability** in the left sidebar
-3. Filter by `AGEDCARE` database
-4. Search for specific analysis IDs or resident IDs
-
-**Direct SQL Access**
-```sql
--- Query analysis history with quality scores
-SELECT 
-    a.ANALYSIS_ID,
-    a.RESIDENT_ID,
-    a.MODEL_USED,
-    a.PROCESSING_TIME_MS,
-    e.GROUNDEDNESS_SCORE,
-    e.IS_CORRECT
-FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS a
-LEFT JOIN AGEDCARE.AGEDCARE.DRI_EVALUATION_DETAIL e 
-    ON a.ANALYSIS_ID = e.ANALYSIS_ID
-ORDER BY a.ANALYSIS_TIMESTAMP DESC;
-```
-
-For full AI Observability documentation, see: [Snowflake AI Observability](https://docs.snowflake.com/en/user-guide/snowflake-cortex/ai-observability)
     """)
 
 session = get_snowflake_session()
@@ -83,7 +40,7 @@ if session:
     col1, col2 = st.columns([1, 3])
     
     with col1:
-        st.subheader("Search")
+        st.subheader("Filters")
         
         residents = execute_query_df("""
             SELECT DISTINCT RESIDENT_ID 
@@ -96,39 +53,65 @@ if session:
         else:
             resident_filter = "All"
         
+        batches = execute_query_df("""
+            SELECT DISTINCT BATCH_RUN_ID 
+            FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+            WHERE BATCH_RUN_ID IS NOT NULL
+            ORDER BY BATCH_RUN_ID DESC
+        """, session)
+        
+        if batches is not None and len(batches) > 0:
+            batch_options = ["All"] + [b[:8] + "..." for b in batches['BATCH_RUN_ID'].tolist()]
+            batch_ids = ["All"] + batches['BATCH_RUN_ID'].tolist()
+            batch_filter_display = st.selectbox("Filter by batch", batch_options)
+            batch_filter = batch_ids[batch_options.index(batch_filter_display)]
+        else:
+            batch_filter = "All"
+        
         limit = st.slider("Max results", 5, 50, 10)
     
     with col2:
-        if resident_filter == "All":
-            analyses = execute_query_df(f"""
-                SELECT ANALYSIS_ID, RESIDENT_ID, CLIENT_SYSTEM_KEY, 
-                       MODEL_USED, PROMPT_VERSION, PROCESSING_TIME_MS,
-                       ANALYSIS_TIMESTAMP, RAW_RESPONSE
-                FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
-                ORDER BY ANALYSIS_TIMESTAMP DESC
-                LIMIT {limit}
-            """, session)
-        else:
-            analyses = execute_query_df(f"""
-                SELECT ANALYSIS_ID, RESIDENT_ID, CLIENT_SYSTEM_KEY, 
-                       MODEL_USED, PROMPT_VERSION, PROCESSING_TIME_MS,
-                       ANALYSIS_TIMESTAMP, RAW_RESPONSE
-                FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
-                WHERE RESIDENT_ID = {resident_filter}
-                ORDER BY ANALYSIS_TIMESTAMP DESC
-                LIMIT {limit}
-            """, session)
+        where_clauses = []
+        if resident_filter != "All":
+            where_clauses.append(f"RESIDENT_ID = {resident_filter}")
+        if batch_filter != "All":
+            where_clauses.append(f"BATCH_RUN_ID = '{batch_filter}'")
+        
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        
+        analyses = execute_query_df(f"""
+            SELECT 
+                ANALYSIS_ID, 
+                RESIDENT_ID, 
+                CLIENT_SYSTEM_KEY, 
+                MODEL_USED, 
+                PROMPT_VERSION, 
+                PROCESSING_TIME_MS,
+                ANALYSIS_TIMESTAMP, 
+                RAW_RESPONSE,
+                RAW_RESPONSE:summary:indicators_detected::NUMBER as INDICATORS_DETECTED,
+                ARRAY_SIZE(RAW_RESPONSE:indicators) as INDICATOR_COUNT,
+                BATCH_RUN_ID
+            FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+            {where_sql}
+            ORDER BY ANALYSIS_TIMESTAMP DESC
+            LIMIT {limit}
+        """, session)
         
         if analyses is not None and len(analyses) > 0:
+            st.subheader(f"Analysis Results ({len(analyses)} records)")
+            
             for idx, row in analyses.iterrows():
-                with st.expander(f"Analysis {row['ANALYSIS_ID'][:8]}... - Resident {row['RESIDENT_ID']} - {row['ANALYSIS_TIMESTAMP']}"):
+                indicator_count = row['INDICATOR_COUNT'] or row['INDICATORS_DETECTED'] or 0
+                batch_label = f" | Batch: {row['BATCH_RUN_ID']}" if row['BATCH_RUN_ID'] else ""
+                
+                with st.expander(f"Resident {row['RESIDENT_ID']} - {indicator_count} indicators - {row['ANALYSIS_TIMESTAMP']}{batch_label}"):
                     with st.container(border=True):
-                        col_m1, col_m2, col_m3 = st.columns(3)
-                        col_m1.metric("Model", row['MODEL_USED'])
-                        col_m2.metric("Prompt version", row['PROMPT_VERSION'])
-                        col_m3.metric("Processing time", f"{row['PROCESSING_TIME_MS']}ms")
-                    
-                    st.markdown("**Raw LLM response:**")
+                        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                        col_m1.metric("Model", row['MODEL_USED'] or "N/A")
+                        col_m2.metric("Prompt", row['PROMPT_VERSION'] or "N/A")
+                        col_m3.metric("Time", f"{row['PROCESSING_TIME_MS'] or 0}ms")
+                        col_m4.metric("Indicators", indicator_count)
                     
                     if row['RAW_RESPONSE']:
                         try:
@@ -136,13 +119,35 @@ if session:
                                 parsed = json.loads(row['RAW_RESPONSE'])
                             else:
                                 parsed = row['RAW_RESPONSE']
-                            st.json(parsed)
-                        except:
+                            
+                            if 'summary' in parsed:
+                                summary = parsed['summary']
+                                st.markdown(f"**Analysis Notes:** {summary.get('analysis_notes', 'N/A')}")
+                            
+                            if 'indicators' in parsed and parsed['indicators']:
+                                st.markdown("**Detected Indicators:**")
+                                for ind in parsed['indicators']:
+                                    confidence = ind.get('confidence', 'N/A')
+                                    conf_emoji = "🟢" if confidence == 'high' else "🟡" if confidence == 'medium' else "🔴"
+                                    review_badge = " ⚠️" if ind.get('requires_review') else ""
+                                    
+                                    with st.container(border=True):
+                                        st.markdown(f"**{conf_emoji} {ind.get('deficit_id', 'Unknown')} - {ind.get('deficit_name', 'Unknown')}**{review_badge}")
+                                        st.caption(ind.get('reasoning', 'No reasoning provided'))
+                                        
+                                        if 'evidence' in ind and ind['evidence']:
+                                            for ev in ind['evidence'][:2]:
+                                                st.markdown(f"📄 *{ev.get('source_table', 'N/A')}*: {ev.get('text_excerpt', 'N/A')[:100]}...")
+                            
+                            with st.expander("View raw JSON"):
+                                st.json(parsed)
+                                
+                        except Exception as e:
                             st.code(str(row['RAW_RESPONSE']), language="json")
                     else:
                         st.info("No response data stored", icon=":material/info:")
         else:
-            st.info("No analysis results found. Run an analysis from the Prompt engineering page.", icon=":material/info:")
+            st.info("No analysis results found. Run a batch test from the Batch Testing page to generate results.", icon=":material/info:")
 
 else:
     st.error("Failed to connect to Snowflake", icon=":material/error:")
