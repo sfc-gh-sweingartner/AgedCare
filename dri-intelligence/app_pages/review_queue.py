@@ -132,6 +132,7 @@ When you reject specific indicators, the DRI score is recalculated based only on
                         reject_mode_key = f"reject_mode_{row['QUEUE_ID']}"
                         recalc_mode_key = f"recalc_mode_{row['QUEUE_ID']}"
                         rejected_ids_key = f"rejected_ids_{row['QUEUE_ID']}"
+                        reason_mode_key = f"reason_mode_{row['QUEUE_ID']}"
                         
                         if reject_mode_key not in st.session_state:
                             st.session_state[reject_mode_key] = False
@@ -147,7 +148,16 @@ When you reject specific indicators, the DRI score is recalculated based only on
                                 conf_emoji = "🟢" if conf == 'high' else "🟡" if conf == 'medium' else "🔴"
                                 with st.container(border=True):
                                     st.markdown(f"**{conf_emoji} {ind.get('deficit_id', '?')} - {ind.get('deficit_name', 'Unknown')}**")
-                                    st.caption(ind.get('reasoning', 'No reasoning')[:300])
+                                    with st.expander("View details", expanded=False):
+                                        st.markdown(f"**Reasoning:** {ind.get('reasoning', 'No reasoning provided')}")
+                                        temporal = ind.get('temporal_status', {})
+                                        if temporal:
+                                            st.markdown(f"**Temporal:** {temporal.get('type', 'N/A')} | Onset: {temporal.get('onset_date', 'N/A')} | Persistence: {temporal.get('persistence_rule', 'N/A')}")
+                                        evidence_list = ind.get('evidence', [])
+                                        if evidence_list:
+                                            st.markdown("**Evidence:**")
+                                            for ev in evidence_list:
+                                                st.caption(f"- **{ev.get('source_table', 'N/A')}** ({ev.get('event_date', 'N/A')}): {ev.get('text_excerpt', 'N/A')}")
                             
                             st.markdown("---")
                             col_btn1, col_btn2 = st.columns(2)
@@ -170,62 +180,138 @@ When you reject specific indicators, the DRI score is recalculated based only on
                                     st.session_state[rejected_ids_key] = {}
                                     st.rerun()
                         
-                        elif st.session_state[reject_mode_key] and not st.session_state[recalc_mode_key]:
-                            st.warning("**Select which indicators to reject and provide a reason for each:**")
+                        elif st.session_state[reject_mode_key] and not st.session_state[recalc_mode_key] and not st.session_state.get(f"reason_mode_{row['QUEUE_ID']}", False):
+                            st.warning("**Select indicators to reject, then click 'Continue' to add reasons:**")
                             
-                            rejections = {}
-                            
-                            for i, ind in enumerate(indicators[:15]):
-                                ind_id = ind.get('deficit_id', f'unknown_{i}')
-                                ind_name = ind.get('deficit_name', 'Unknown')
-                                conf = ind.get('confidence', 'N/A')
-                                conf_emoji = "🟢" if conf == 'high' else "🟡" if conf == 'medium' else "🔴"
-                                
-                                with st.container(border=True):
-                                    col_check, col_info = st.columns([1, 4])
+                            with st.form(key=f"reject_form_{row['QUEUE_ID']}"):
+                                for i, ind in enumerate(indicators[:15]):
+                                    ind_id = ind.get('deficit_id', f'unknown_{i}')
+                                    ind_name = ind.get('deficit_name', 'Unknown')
+                                    conf = ind.get('confidence', 'N/A')
+                                    conf_emoji = "🟢" if conf == 'high' else "🟡" if conf == 'medium' else "🔴"
+                                    
+                                    col_check, col_info = st.columns([1, 6])
                                     
                                     with col_check:
-                                        reject_this = st.checkbox(
+                                        st.checkbox(
                                             "Reject", 
                                             key=f"reject_ind_{row['QUEUE_ID']}_{i}",
-                                            help=f"Check to reject indicator {ind_id}"
+                                            label_visibility="collapsed"
                                         )
                                     
                                     with col_info:
-                                        st.markdown(f"**{conf_emoji} {ind_id} - {ind_name}**")
-                                        st.caption(ind.get('reasoning', 'No reasoning')[:200])
-                                    
-                                    if reject_this:
-                                        reason = st.text_input(
-                                            f"Reason for rejecting {ind_id}",
-                                            key=f"reason_{row['QUEUE_ID']}_{i}",
-                                            placeholder="e.g., False positive - no supporting evidence in notes"
-                                        )
-                                        rejections[ind_id] = {
+                                        st.markdown(f"**{conf_emoji} {ind_id}** - {ind_name}")
+                                        with st.expander("View details", expanded=False):
+                                            st.markdown(f"**Reasoning:** {ind.get('reasoning', 'No reasoning provided')}")
+                                            temporal = ind.get('temporal_status', {})
+                                            if temporal:
+                                                st.markdown(f"**Temporal:** {temporal.get('type', 'N/A')} | Onset: {temporal.get('onset_date', 'N/A')} | Persistence: {temporal.get('persistence_rule', 'N/A')}")
+                                            evidence_list = ind.get('evidence', [])
+                                            if evidence_list:
+                                                st.markdown("**Evidence:**")
+                                                for ev in evidence_list:
+                                                    st.caption(f"- **{ev.get('source_table', 'N/A')}** ({ev.get('event_date', 'N/A')}): {ev.get('text_excerpt', 'N/A')}")
+                                
+                                st.markdown("---")
+                                col_cancel, col_continue = st.columns(2)
+                                
+                                with col_cancel:
+                                    back_clicked = st.form_submit_button("← Back", use_container_width=True)
+                                
+                                with col_continue:
+                                    continue_clicked = st.form_submit_button("Continue →", use_container_width=True, type="primary")
+                            
+                            if back_clicked:
+                                st.session_state[reject_mode_key] = False
+                                st.session_state[rejected_ids_key] = {}
+                                st.rerun()
+                            
+                            if continue_clicked:
+                                checked_rejections = {}
+                                for i, ind in enumerate(indicators[:15]):
+                                    checkbox_key = f"reject_ind_{row['QUEUE_ID']}_{i}"
+                                    if st.session_state.get(checkbox_key, False):
+                                        ind_id = ind.get('deficit_id', f'unknown_{i}')
+                                        ind_name = ind.get('deficit_name', 'Unknown')
+                                        checked_rejections[ind_id] = {
                                             'indicator_id': ind_id,
                                             'indicator_name': ind_name,
+                                            'confidence': ind.get('confidence', 'N/A'),
+                                            'reasoning': ind.get('reasoning', 'No reasoning provided'),
+                                            'temporal_status': ind.get('temporal_status', {}),
+                                            'evidence': ind.get('evidence', []),
+                                            'reason': ''
+                                        }
+                                
+                                if checked_rejections:
+                                    st.session_state[rejected_ids_key] = checked_rejections
+                                    st.session_state[f"reason_mode_{row['QUEUE_ID']}"] = True
+                                    st.rerun()
+                                else:
+                                    st.error("Please select at least one indicator to reject.")
+                        
+                        elif st.session_state.get(f"reason_mode_{row['QUEUE_ID']}", False) and not st.session_state[recalc_mode_key]:
+                            st.info("**Provide a reason for each rejected indicator:**")
+                            
+                            rejections = st.session_state[rejected_ids_key]
+                            
+                            with st.form(key=f"reason_form_{row['QUEUE_ID']}"):
+                                for ind_id, rej_data in rejections.items():
+                                    conf = rej_data.get('confidence', 'N/A')
+                                    conf_emoji = "🟢" if conf == 'high' else "🟡" if conf == 'medium' else "🔴"
+                                    with st.container(border=True):
+                                        st.markdown(f"**❌ {conf_emoji} {ind_id}** - {rej_data['indicator_name']}")
+                                        with st.expander("View details", expanded=False):
+                                            st.markdown(f"**Reasoning:** {rej_data.get('reasoning', 'No reasoning provided')}")
+                                            temporal = rej_data.get('temporal_status', {})
+                                            if temporal:
+                                                st.markdown(f"**Temporal:** {temporal.get('type', 'N/A')} | Onset: {temporal.get('onset_date', 'N/A')} | Persistence: {temporal.get('persistence_rule', 'N/A')}")
+                                            evidence_list = rej_data.get('evidence', [])
+                                            if evidence_list:
+                                                st.markdown("**Evidence:**")
+                                                for ev in evidence_list:
+                                                    st.caption(f"- **{ev.get('source_table', 'N/A')}** ({ev.get('event_date', 'N/A')}): {ev.get('text_excerpt', 'N/A')}")
+                                        reason = st.text_input(
+                                            f"Rejection reason",
+                                            key=f"reason_{row['QUEUE_ID']}_{ind_id}",
+                                            placeholder="Enter rejection reason...",
+                                            label_visibility="collapsed"
+                                        )
+                                
+                                st.markdown("---")
+                                col_back, col_recalc = st.columns(2)
+                                
+                                with col_back:
+                                    back_to_select = st.form_submit_button("← Back", use_container_width=True)
+                                
+                                with col_recalc:
+                                    recalc_clicked = st.form_submit_button("🔄 Recalculate DRI", use_container_width=True, type="primary")
+                            
+                            if back_to_select:
+                                st.session_state[f"reason_mode_{row['QUEUE_ID']}"] = False
+                                st.rerun()
+                            
+                            if recalc_clicked:
+                                rejections_with_reasons = {}
+                                all_have_reasons = True
+                                for ind_id in rejections.keys():
+                                    reason = st.session_state.get(f"reason_{row['QUEUE_ID']}_{ind_id}", "")
+                                    if reason.strip():
+                                        rejections_with_reasons[ind_id] = {
+                                            'indicator_id': ind_id,
+                                            'indicator_name': rejections[ind_id]['indicator_name'],
                                             'reason': reason
                                         }
-                            
-                            st.markdown("---")
-                            col_cancel, col_recalc = st.columns(2)
-                            
-                            with col_cancel:
-                                if st.button("← Back", key=f"cancel_{row['QUEUE_ID']}", use_container_width=True):
-                                    st.session_state[reject_mode_key] = False
-                                    st.session_state[rejected_ids_key] = {}
-                                    st.rerun()
-                            
-                            with col_recalc:
-                                rejections_with_reasons = {k: v for k, v in rejections.items() if v.get('reason')}
+                                    else:
+                                        all_have_reasons = False
                                 
-                                if rejections_with_reasons:
-                                    if st.button("🔄 Recalculate DRI", key=f"recalc_{row['QUEUE_ID']}", use_container_width=True, type="primary"):
-                                        st.session_state[rejected_ids_key] = rejections_with_reasons
-                                        st.session_state[recalc_mode_key] = True
-                                        st.rerun()
+                                if all_have_reasons and rejections_with_reasons:
+                                    st.session_state[rejected_ids_key] = rejections_with_reasons
+                                    st.session_state[recalc_mode_key] = True
+                                    st.session_state[f"reason_mode_{row['QUEUE_ID']}"] = False
+                                    st.rerun()
                                 else:
-                                    st.button("🔄 Recalculate DRI", key=f"recalc_{row['QUEUE_ID']}", use_container_width=True, disabled=True, help="Select at least one indicator and provide a reason")
+                                    st.warning("Please provide a reason for each rejected indicator.")
                         
                         elif st.session_state[recalc_mode_key]:
                             rejections_with_reasons = st.session_state[rejected_ids_key]
