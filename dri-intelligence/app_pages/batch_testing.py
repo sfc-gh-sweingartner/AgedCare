@@ -196,7 +196,7 @@ if session:
                                 }}
                             ],
                             {{
-                                'max_tokens': 4096
+                                'max_tokens': 8192
                             }}
                         ) as RESPONSE
                     """
@@ -207,11 +207,19 @@ if session:
                     if result:
                         raw_response = result[0]['RESPONSE']
                         
-                        try:
-                            response_obj = json.loads(raw_response)
-                            response_text = response_obj.get('choices', [{}])[0].get('messages', raw_response)
-                        except:
-                            response_text = raw_response
+                        if isinstance(raw_response, dict):
+                            response_text = raw_response.get('choices', [{}])[0].get('messages', '')
+                        elif isinstance(raw_response, str):
+                            try:
+                                response_obj = json.loads(raw_response)
+                                response_text = response_obj.get('choices', [{}])[0].get('messages', raw_response)
+                            except:
+                                response_text = raw_response
+                        else:
+                            response_text = str(raw_response)
+                        
+                        if not isinstance(response_text, str):
+                            response_text = json.dumps(response_text) if response_text else ''
                         
                         cleaned = response_text.strip()
                         if cleaned.startswith('```json'):
@@ -229,85 +237,104 @@ if session:
                         else:
                             json_str = cleaned
                         
-                        escaped_json = json_str.replace("'", "''").replace("\\", "\\\\")
-                        insert_query = f"""
-                            INSERT INTO AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
-                            (RESIDENT_ID, CLIENT_SYSTEM_KEY, MODEL_USED, PROMPT_VERSION, 
-                             RAW_RESPONSE, PROCESSING_TIME_MS, BATCH_RUN_ID)
-                            SELECT 
-                                {resident_id},
-                                '{selected_client_key}',
-                                '{prod_model}',
-                                '{prod_prompt_version}',
-                                TRY_PARSE_JSON('{escaped_json}'),
-                                {processing_time},
-                                '{batch_id}'
-                        """
-                        execute_query(insert_query, session)
-                        
-                        analysis_id_result = execute_query(f"""
-                            SELECT ANALYSIS_ID FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
-                            WHERE RESIDENT_ID = {resident_id} AND BATCH_RUN_ID = '{batch_id}'
-                            ORDER BY ANALYSIS_TIMESTAMP DESC LIMIT 1
-                        """, session)
-                        
-                        if analysis_id_result:
-                            analysis_id = analysis_id_result[0]['ANALYSIS_ID']
-                            
+                        def try_parse_json(s):
                             try:
-                                parsed_response = json.loads(json_str)
-                                indicators = parsed_response.get('indicators', [])
-                                summary = parsed_response.get('summary', {})
+                                return json.loads(s), None
+                            except json.JSONDecodeError as e:
+                                return None, str(e)
+                        
+                        def repair_truncated_json(s):
+                            open_braces = s.count('{') - s.count('}')
+                            open_brackets = s.count('[') - s.count(']')
+                            
+                            if open_braces > 0 or open_brackets > 0:
+                                last_complete = max(s.rfind('},'), s.rfind('}]'), s.rfind('"'))
+                                if last_complete > len(s) // 2:
+                                    s = s[:last_complete+1]
+                                    s += ']' * open_brackets + '}' * open_braces
+                            return s
+                        
+                        parsed_json, parse_error = try_parse_json(json_str)
+                        
+                        if parsed_json is None:
+                            repaired = repair_truncated_json(json_str)
+                            parsed_json, parse_error = try_parse_json(repaired)
+                            if parsed_json:
+                                json_str = repaired
+                        
+                        if parsed_json:
+                            
+                            indicators = parsed_json.get('indicators', [])
+                            summary = parsed_json.get('summary', {})
+                            
+                            indicators_detected = len([i for i in indicators if i.get('detected', True)])
+                            indicators_cleared = summary.get('indicators_cleared', 0) or 0
+                            
+                            proposed_score = round(indicators_detected / 33, 4)
+                            if proposed_score <= 0.2:
+                                severity = 'Low'
+                            elif proposed_score <= 0.4:
+                                severity = 'Medium'
+                            elif proposed_score <= 0.6:
+                                severity = 'High'
+                            else:
+                                severity = 'Very High'
+                            
+                            indicator_changes = json.dumps(indicators)
+                            change_summary = summary.get('analysis_notes', f'Detected {indicators_detected} indicators')[:500]
+                            
+                            session.sql("""
+                                INSERT INTO AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
+                                (RESIDENT_ID, CLIENT_SYSTEM_KEY, MODEL_USED, PROMPT_VERSION, 
+                                 RAW_RESPONSE, PROCESSING_TIME_MS, BATCH_RUN_ID)
+                                SELECT ?, ?, ?, ?, PARSE_JSON(?), ?, ?
+                            """, params=[resident_id, selected_client_key, prod_model, prod_prompt_version, 
+                                        json_str, processing_time, batch_id]).collect()
+                            
+                            analysis_id_result = execute_query(f"""
+                                SELECT ANALYSIS_ID FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
+                                WHERE RESIDENT_ID = {resident_id} AND BATCH_RUN_ID = '{batch_id}'
+                                ORDER BY ANALYSIS_TIMESTAMP DESC LIMIT 1
+                            """, session)
+                            
+                            if analysis_id_result:
+                                analysis_id = analysis_id_result[0]['ANALYSIS_ID']
                                 
-                                indicators_detected = len([i for i in indicators if i.get('detected', True)])
-                                indicators_cleared = summary.get('indicators_cleared', 0) or 0
-                                
-                                proposed_score = round(indicators_detected / 33, 4)
-                                if proposed_score <= 0.2:
-                                    severity = 'Low'
-                                elif proposed_score <= 0.4:
-                                    severity = 'Medium'
-                                elif proposed_score <= 0.6:
-                                    severity = 'High'
-                                else:
-                                    severity = 'Very High'
-                                
-                                indicator_changes = json.dumps(indicators)
-                                escaped_changes = indicator_changes.replace("'", "''")
-                                change_summary = summary.get('analysis_notes', f'Detected {indicators_detected} indicators')[:500]
-                                escaped_summary = change_summary.replace("'", "''")
-                                
-                                queue_insert = f"""
+                                session.sql("""
                                     INSERT INTO AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE 
                                     (ANALYSIS_ID, RESIDENT_ID, CLIENT_SYSTEM_KEY, 
                                      CURRENT_DRI_SCORE, PROPOSED_DRI_SCORE,
                                      CURRENT_SEVERITY_BAND, PROPOSED_SEVERITY_BAND,
                                      INDICATORS_ADDED, INDICATORS_REMOVED,
                                      INDICATOR_CHANGES_JSON, CHANGE_SUMMARY, STATUS)
-                                    SELECT
-                                        '{analysis_id}',
-                                        {resident_id},
-                                        '{selected_client_key}',
-                                        0.0,
-                                        {proposed_score},
-                                        'Unknown',
-                                        '{severity}',
-                                        {indicators_detected},
-                                        {indicators_cleared},
-                                        TRY_PARSE_JSON('{escaped_changes}'),
-                                        '{escaped_summary}',
-                                        'PENDING'
-                                """
-                                execute_query(queue_insert, session)
-                            except Exception as queue_err:
-                                pass
-                        
-                        results.append({
-                            "resident_id": resident_id,
-                            "status": "Success",
-                            "processing_time_ms": processing_time
-                        })
-                        successful += 1
+                                    SELECT ?, ?, ?, 0.0, ?, 'Unknown', ?, ?, ?, PARSE_JSON(?), ?, 'PENDING'
+                                """, params=[analysis_id, resident_id, selected_client_key,
+                                            proposed_score, severity, indicators_detected, indicators_cleared,
+                                            indicator_changes, change_summary]).collect()
+                            
+                            results.append({
+                                "resident_id": resident_id,
+                                "status": "Success",
+                                "indicators": indicators_detected,
+                                "processing_time_ms": processing_time
+                            })
+                            successful += 1
+                            
+                        else:
+                            session.sql("""
+                                INSERT INTO AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
+                                (RESIDENT_ID, CLIENT_SYSTEM_KEY, MODEL_USED, PROMPT_VERSION, 
+                                 RAW_RESPONSE, PROCESSING_TIME_MS, BATCH_RUN_ID)
+                                SELECT ?, ?, ?, ?, OBJECT_CONSTRUCT('parse_error', TRUE, 'error', ?, 'raw_text', LEFT(?, 3000)), ?, ?
+                            """, params=[resident_id, selected_client_key, prod_model, prod_prompt_version,
+                                        parse_error or 'Unknown error', json_str, processing_time, batch_id]).collect()
+                            
+                            results.append({
+                                "resident_id": resident_id,
+                                "status": f"Parse error: {(parse_error or 'Unknown')[:50]}",
+                                "processing_time_ms": processing_time
+                            })
+                            failed += 1
                     else:
                         results.append({
                             "resident_id": resident_id,

@@ -1,0 +1,40 @@
+# Page Snapshot - DRI Intelligence
+# URL: http://localhost:8503/review_queue
+# Elements: 32 | Timestamp: 2026-02-23T03:39:34.235Z
+#
+# Usage: Use uid="<element_ref>" in browser_click, browser_type, etc.
+#
+
+- RootWebArea "DRI Intelligence":
+  - region "keyboard_double_arrow_leftdashboardDashboardsciencePrompt engineeringlabsBatch t..." [100 chars] [expanded]
+  - link "dashboardDashboard" [ref=stSidebarNavLink, url="/"]
+  - link "sciencePrompt engineering" [ref=stSidebarNavLink_1, url="/prompt_engineering"]
+  - link "labsBatch testing" [ref=stSidebarNavLink_2, url="/batch_testing"]
+  - link "checklistReview queue" [ref=stSidebarNavLink_3, url="/review_queue"]
+  - link "analyticsAudit results" [ref=stSidebarNavLink_4, url="/audit_results"]
+  - link "feedbackFeedback loop" [ref=stSidebarNavLink_5, url="/feedback_loop"]
+  - link "settingsConfiguration" [ref=stSidebarNavLink_6, url="/configuration"]
+  - link "compare_arrowsClaude vs Regex" [ref=stSidebarNavLink_7, url="/comparison"]
+  - banner "Deploy"
+  - button "Deploy" [ref=stBaseButton-header]
+  - button [ref=stBaseButton-headerNoPadding]
+  - region "checklist Review queuehelpHow to use this pagePurpose
+This is the human-in-the-l..." [100 chars]
+  - heading "checklist Review queue" [ref=checklist-review-queue, level=1]
+  - heading "Purpose" [ref=purpose, level=3]
+  - heading "Workflow" [ref=workflow, level=3]
+  - heading "Understanding the Recalculated DRI" [ref=understanding-the-recalculated-dri, level=3]
+  - combobox "Selected PENDING. Filter by status" [ref=combobox_Selected_PENDING__Filter_by_st, popup=listbox]
+  - button "🔄 Refresh queue" [ref=stBaseButton-secondary]
+  - heading "Review Indicators" [ref=review-indicators, level=3]
+  - button "✅ Approve All" [ref=stBaseButton-primary]
+  - button "❌ Reject Some..." [ref=stBaseButton-secondary_1]
+  - heading "Review Indicators" [ref=review-indicators_1, level=3]
+  - button "✅ Approve All" [ref=stBaseButton-primary_1]
+  - button "❌ Reject Some..." [ref=stBaseButton-secondary_2]
+  - heading "Review Indicators" [ref=review-indicators_2, level=3]
+  - button "✅ Approve All" [ref=stBaseButton-primary_2]
+  - button "❌ Reject Some..." [ref=stBaseButton-secondary_3]
+  - heading "Review Indicators" [ref=review-indicators_3, level=3]
+  - button "✅ Approve All" [ref=stBaseButton-primary_3]
+  - button "❌ Reject Some..." [ref=stBaseButton-secondary_4]

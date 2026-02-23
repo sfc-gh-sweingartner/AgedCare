@@ -23,7 +23,8 @@ entities:
       - app_pages/dashboard.py
       - app_pages/prompt_engineering.py
       - app_pages/review_queue.py
-      - app_pages/analysis_results.py
+      - app_pages/audit_results.py
+      - app_pages/feedback_loop.py
       - app_pages/configuration.py
       - app_pages/comparison.py
       - app_pages/batch_testing.py

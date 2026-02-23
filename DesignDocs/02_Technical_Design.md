@@ -476,6 +476,22 @@ WHERE rq.STATUS = 'REJECTED'
 GROUP BY lla.PROMPT_VERSION, rq.REVIEWER_NOTES
 ORDER BY REJECTION_COUNT DESC;
 
+-- View: Indicator Rejection Rates (NEW v2.0 - for Feedback Loop page)
+CREATE OR REPLACE VIEW AGEDCARE.AGEDCARE.V_INDICATOR_REJECTION_RATES AS
+SELECT 
+    ir.INDICATOR_ID,
+    ir.INDICATOR_NAME,
+    lla.PROMPT_VERSION,
+    rq.CLIENT_SYSTEM_KEY,
+    COUNT(*) as REJECTION_COUNT,
+    COUNT(DISTINCT ir.QUEUE_ID) as REVIEWS_WITH_REJECTION,
+    LISTAGG(DISTINCT ir.REJECTION_REASON, ' | ') WITHIN GROUP (ORDER BY ir.REJECTED_TIMESTAMP) as SAMPLE_REASONS
+FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS ir
+JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
+JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+GROUP BY ir.INDICATOR_ID, ir.INDICATOR_NAME, lla.PROMPT_VERSION, rq.CLIENT_SYSTEM_KEY
+ORDER BY REJECTION_COUNT DESC;
+
 -- View: Ground Truth Coverage (for test dataset completeness)
 CREATE OR REPLACE VIEW AGEDCARE.AGEDCARE.V_GROUND_TRUTH_COVERAGE AS
 SELECT 
@@ -835,7 +851,8 @@ dri-intelligence/
 │   ├── dashboard.py            # Dashboard - Overview metrics
 │   ├── prompt_engineering.py   # Prompt Engineering - Test/tune prompts
 │   ├── review_queue.py         # Review Queue - Approval workflow
-│   ├── analysis_results.py     # Analysis Results - View LLM output
+│   ├── audit_results.py        # Audit Results - View LLM output (renamed from analysis_results)
+│   ├── feedback_loop.py        # Feedback Loop - Rejection analysis & prompt improvement (NEW v2.0)
 │   ├── configuration.py        # Configuration - Client & processing settings
 │   ├── comparison.py           # Claude vs Regex - DEMO ONLY (to be removed)
 │   └── batch_testing.py        # Batch Testing + Approval-based Quality Metrics
@@ -849,7 +866,8 @@ dri-intelligence/
 - Dashboard (:material/dashboard:)
 - Prompt engineering (:material/science:)
 - Review queue (:material/checklist:)
-- Analysis results (:material/analytics:)
+- Audit results (:material/analytics:) - renamed from Analysis Results
+- Feedback loop (:material/feedback:) - NEW rejection analysis page
 - Configuration (:material/settings:)
 - Claude vs Regex (:material/compare_arrows:) - DEMO ONLY
 - Batch testing (:material/labs:)
@@ -1700,7 +1718,7 @@ The warehouse `MYWH` is used ONLY for:
 
 ---
 
-*Document Version: 1.9*  
+*Document Version: 2.0*  
 *Created: 2026-01-28*  
 *Updated: 2026-02-22*  
 *Status: Approved*
@@ -1718,3 +1736,4 @@ The warehouse `MYWH` is used ONLY for:
 | 1.7 | 2026-02-17 | **Architecture Simplification**: Removed TruLens/AI Observability entirely. Replaced with approval-based quality metrics. Added V_PROMPT_QUALITY_SCORE, V_QUALITY_TREND, V_REJECTION_ANALYSIS views. Added HARVEST_GROUND_TRUTH_FROM_APPROVALS() procedure. Removed ai_observability.py, evaluation_job/ directory, and TruLens packages. |
 | 1.8 | 2026-02-18 | **Enhanced Rejection Workflow**: Added DRI_INDICATOR_REJECTIONS table for granular indicator-level rejection feedback. Review Queue now supports two-phase rejection: select indicators via checkboxes, provide reason for each. STATUS column includes PARTIAL_REJECT. Analysis Results shows full batch ID (not truncated). |
 | 1.9 | 2026-02-22 | **Business Rules Integration**: Added DRI_BUSINESS_RULES table for complete 33-deficit rule specifications (rule types, functions, temporal logic, thresholds). Added DRI_RULE_STATE table for tracking per-resident rule state with expiry logic. Updated configuration.py tab 5 to display full business rules. Added Outstanding Requirements indicator in UI. |
+| 2.0 | 2026-02-22 | **Feedback Loop Page**: Renamed analysis_results.py to audit_results.py. Added feedback_loop.py with rejection analysis, reason theme clustering via Cortex AI, and AI prompt improvement suggestions. Added V_INDICATOR_REJECTION_RATES view. |

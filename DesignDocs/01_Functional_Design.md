@@ -710,10 +710,10 @@ DRI Intelligence POC (Implemented)
 ├── dashboard.py              :material/dashboard:     (Overview metrics and status)
 ├── prompt_engineering.py     :material/science:       (Edit and test prompts + Run Evaluation)
 ├── review_queue.py           :material/checklist:     (Human approval workflow)
-├── analysis_results.py       :material/analytics:     (View LLM analysis details)
+├── audit_results.py          :material/analytics:     (View LLM analysis audit trail)
+├── feedback_loop.py          :material/feedback:      (Rejection analysis & prompt improvement)
 ├── configuration.py          :material/settings:      (Settings, RAG, client config)
-├── comparison.py             :material/compare_arrows: (Claude vs Regex - DEMO ONLY)
-└── quality_metrics.py        :material/monitoring:    (AI Observability quality metrics)
+└── comparison.py             :material/compare_arrows: (Claude vs Regex - DEMO ONLY)
 ```
 
 **Navigation:** Uses `st.navigation()` with Material icons (implemented in streamlit_app.py)
@@ -752,12 +752,45 @@ DRI Intelligence POC (Implemented)
 - View rejection details on already-rejected items
 - Full batch ID displayed in Analysis Results (not truncated)
 
-#### Page 4: Analysis Results (IMPLEMENTED)
+#### Page 4: Audit Results (IMPLEMENTED - Renamed from Analysis Results)
 - Browse all LLM analyses from DRI_LLM_ANALYSIS
 - Filter by resident, date range, batch ID
 - View full raw JSON response
 - Processing time and model used
 - Source traceability through evidence array
+
+#### Page 5: Feedback Loop (NEW - v2.0)
+This page enables continuous prompt improvement by analyzing rejection patterns and using Cortex AI to suggest prompt enhancements.
+
+**Section 1: Indicator Rejection Rates**
+- Overview metrics: Total reviews, Approval rate, Rejection rate
+- Bar chart showing rejection rate per indicator (e.g., D008 Diabetes: 15% reject, D025 Depression: 12% reject)
+- Optional filters: Prompt version, Facility (CLIENT_SYSTEM_KEY)
+- Drill-down: Click indicator to see list of rejections with reasons
+
+**Section 2: Rejection Reason Themes**
+- Uses Cortex AI to cluster rejection reasons into themes
+- Example themes: "Medicine-based diagnosis" (45 rejections), "Insufficient evidence" (12 rejections)
+- Each theme shows:
+  - Representative rejection reasons
+  - Affected indicators
+  - Frequency count
+
+**Section 3: AI Prompt Improvement Suggestions**
+- Shows **Current Active Prompt** in expandable viewer for context
+- Cortex AI analyzes rejection patterns AGAINST the actual prompt text
+- Output format:
+  - **Problem Summary**: Root causes identified from rejection patterns
+  - **🔧 Prompt Text to Edit/Replace**: Specific problematic sections from current prompt
+    - Shows original text to remove/replace (verbatim from prompt)
+    - Provides suggested replacement text
+    - Lists affected indicators (e.g., D008, D025, D014)
+  - **➕ Additional Text to Add**: New instructions (only if edits aren't sufficient)
+    - Where to add in prompt
+    - Rationale for addition
+  - **📈 Expected Impact**: Estimated reduction in rejections
+- Next step guidance: "Go to Prompt Engineering page, find and replace the problematic text"
+- AI prioritizes identifying problematic existing text over suggesting additions
 
 #### Page 5: Configuration (IMPLEMENTED - 5 Tabs)
 - **Client Config Tab**: Client details, status, CONFIG_JSON viewer
@@ -921,7 +954,8 @@ Existing ETL ──▶ 6 Source Tables ──▶ Client Config ──▶ LLM Eng
 | Dashboard page | ✅ Complete | Metrics display, connection status |
 | Prompt Engineering page | ✅ Complete | Resident/model/version selector, run analysis |
 | Review Queue page | ✅ Complete | Aggregate approval workflow |
-| Analysis Results page | ✅ Complete | Browse LLM analyses |
+| Audit Results page | ✅ Complete | Browse LLM analyses (renamed from Analysis Results) |
+|| Feedback Loop page | ✅ Complete | Rejection analysis, reason themes, AI suggestions |
 | Configuration page | ✅ Complete | 5 tabs including processing settings |
 | Claude vs Regex page | ✅ Complete (DEMO) | Side-by-side comparison - demo only, to be removed |
 | Batch Testing page | ✅ Complete | Batch analysis + approval-based quality metrics |
@@ -1101,7 +1135,7 @@ The following requirements from the DRI specification are **documented but not y
 
 ---
 
-*Document Version: 1.9*  
+*Document Version: 2.0*  
 *Created: 2025-01-27*  
-*Updated: 2026-02-22 (Business Rules Integration - 33 deficits documented)*  
+*Updated: 2026-02-22 (Feedback Loop page for rejection analysis & prompt improvement)*  
 *Status: Approved*

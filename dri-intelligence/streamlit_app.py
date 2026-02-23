@@ -14,7 +14,8 @@ page = st.navigation([
     st.Page("app_pages/prompt_engineering.py", title="Prompt engineering", icon=":material/science:"),
     st.Page("app_pages/batch_testing.py", title="Batch testing", icon=":material/labs:"),
     st.Page("app_pages/review_queue.py", title="Review queue", icon=":material/checklist:"),
-    st.Page("app_pages/analysis_results.py", title="Analysis results", icon=":material/analytics:"),
+    st.Page("app_pages/audit_results.py", title="Audit results", icon=":material/analytics:"),
+    st.Page("app_pages/feedback_loop.py", title="Feedback loop", icon=":material/feedback:"),
     st.Page("app_pages/configuration.py", title="Configuration", icon=":material/settings:"),
     st.Page("app_pages/comparison.py", title="Claude vs Regex", icon=":material/compare_arrows:"),
 ], position="sidebar")
