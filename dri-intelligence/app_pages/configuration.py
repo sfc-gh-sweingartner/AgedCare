@@ -9,7 +9,7 @@ if session:
     with st.expander("How to use this page", expanded=False, icon=":material/help:"):
         st.markdown("""
 ### Purpose
-This is the **administration hub** for configuring the DRI Intelligence system. It contains client settings, form mappings, and **production deployment settings**.
+This is the **administration hub** for configuring the DRI Intelligence system. It contains client settings, form mappings, DRI rules with versioning, and **production deployment settings**.
 
 ### Tabs Overview
 
@@ -17,13 +17,22 @@ This is the **administration hub** for configuring the DRI Intelligence system. 
 |-----|---------|
 | **Client Config** | View/edit client details and full JSON configuration |
 | **Form Mappings** | See how client-specific form fields map to DRI indicators |
-| **DRI Rules** | View/edit all 33 deficit detection rules with versioning |
-| **Processing Settings** | **Configure production model, prompt, and batch schedule** |
+| **DRI Rules** | View/edit all 33 deficit detection rules with **per-deficit versioning** |
+| **Processing Settings** | Configure production model, prompt, and batch schedule |
 
-### Processing Settings (Most Important)
+### DRI Rules Tab
+- All 33 deficit rules are stored in the unified `DRI_RULES` table
+- Each deficit has its own version number (e.g., D001-0001, D001-0002)
+- **PERSISTENT deficits** (expiry_days=0) never expire once confirmed
+- **FLUCTUATING deficits** have configurable expiry (1-90 days)
+- Editing a rule creates a new version (old versions retained for audit)
+
+### Processing Settings Tab
 This tab controls what runs during **nightly batch processing**:
 - **Production Model**: Which LLM model to use (recommend Claude 4.5 variants)
-- **Production Prompt**: The exact prompt text used for batch analysis
+- **Production Prompt**: Read-only display of current prompt; click **Save for production** to save a new version
+- **Prompt Versions**: Auto-incremented (v0001, v0002, etc.) - no manual entry needed
+- **Deficit Versions Table**: Shows current version of each of the 33 deficit rules
 - **Batch Schedule**: When the nightly job runs (cron format)
 - **Adaptive Token Sizing**: Threshold for standard vs large token mode
 
@@ -42,13 +51,14 @@ The LLM analysis uses adaptive token sizing to optimize performance during batch
 ### Workflow
 1. Test prompts in the **Prompt Engineering** page
 2. Once satisfied, come here to **Processing Settings**
-3. Select your tested model and load your prompt template
-4. Click **Save for Production** to deploy
+3. Select your tested model and review the prompt text
+4. Click **Save for production** to deploy with auto-incremented version
 5. The nightly batch will use these settings automatically
 
 ### Tips
 - Always test thoroughly in Prompt Engineering before saving to production
-- Use **Claude vs Regex** comparison to validate accuracy improvements
+- Prompt versions are auto-incremented (v0001, v0002, etc.) - you don't need to type version numbers
+- Deficit rule versions are per-deficit (D001-0001, D002-0001) - editing D001 doesn't affect D002's version
         """)
 
     clients = execute_query_df("""

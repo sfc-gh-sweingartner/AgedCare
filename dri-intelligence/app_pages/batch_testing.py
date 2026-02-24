@@ -22,6 +22,36 @@ from src.connection_helper import get_snowflake_session, execute_query_df, execu
 session = get_snowflake_session()
 
 if session:
+    with st.expander("How to use this page", expanded=False, icon=":material/help:"):
+        st.markdown("""
+### Purpose
+This page provides **batch testing** capabilities and **approval-based quality metrics** to measure prompt effectiveness over time.
+
+### Tabs Overview
+
+| Tab | Purpose |
+|-----|--------|
+| **Batch Test** | Run DRI analysis on multiple residents at once, storing results for review |
+| **Prompt Quality** | View approval rates by prompt version to identify best-performing prompts |
+| **Ground Truth** | Track validated decisions and harvest ground truth from approvals |
+
+### Workflow
+1. **Run Batch Test**: Select a client and sample size, run analysis
+2. **Review in Review Queue**: Approve/reject detected indicators
+3. **Analyze Quality**: Return here to see how your prompt performed
+4. **Iterate**: If rejection rate is high, use Feedback Loop page to improve prompt
+
+### Quality Metrics
+- **Approval Rate**: Primary metric - % of detections approved by reviewers
+- **Rejection Rate**: % of detections rejected (indicates prompt issues)
+- **Ground Truth**: Validated decisions that can be used for future testing
+
+### Tips
+- Test with diverse residents (different facilities, conditions)
+- Compare approval rates across prompt versions to identify improvements
+- Use Feedback Loop page to analyze rejection patterns and get AI suggestions
+        """)
+
     st.title("Batch Testing & Quality Metrics")
     
     tab1, tab2, tab3 = st.tabs([
@@ -368,7 +398,7 @@ if session:
             Batch test complete! Batch ID: `{batch_id}`
             
             **Next steps:**
-            1. Review results in **Analysis Results** page
+            1. Review results in **Audit results** page
             2. Approve/reject in **Review Queue** page
             3. Check quality metrics in **Prompt Quality** tab
             """)

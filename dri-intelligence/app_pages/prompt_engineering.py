@@ -17,9 +17,44 @@ import json
 from src.connection_helper import get_snowflake_session, execute_query_df, execute_query
 from src.dri_analysis import get_rag_indicators
 
-st.caption("Test and tune LLM prompts for DRI indicator detection")
-
 session = get_snowflake_session()
+
+if session:
+    with st.expander("How to use this page", expanded=False, icon=":material/help:"):
+        st.markdown("""
+### Purpose
+This is the **prompt development environment** for testing and tuning LLM prompts before deploying them to production.
+
+### How to Use
+1. **Select a resident** to analyze
+2. **Choose a model** (Claude 4.5 variants recommended)
+3. **Select or edit a prompt version** - prompts include variable placeholders for resident data and DRI rules
+4. **Click "Run Analysis"** to test the prompt
+5. **Review JSON results** - check detected indicators, confidence, and evidence
+6. **Save as new version** when satisfied (versions auto-increment: v0001, v0002, etc.)
+
+### Key Features
+| Feature | Description |
+|---------|-------------|
+| **Preview full prompt** | See the complete prompt with all variables expanded |
+| **Adaptive token sizing** | Automatically uses larger token limit for residents with more data |
+| **Evidence traceability** | Each detected indicator includes source references |
+| **Version history** | All prompt versions are retained for comparison |
+
+### Variable Placeholders
+The prompt template includes these variables that get replaced at runtime:
+- `{client_form_mappings}` - Client-specific form field mappings
+- `{resident_context}` - All resident data (notes, meds, observations, forms)
+- `{rag_indicator_context}` - DRI rules from the DRI_RULES table
+
+### Tips
+- Test with multiple residents to verify prompt handles different scenarios
+- Compare results before and after prompt changes
+- Check evidence quality - good prompts cite specific source records
+- After testing, go to Configuration > Processing Settings to deploy to production
+        """)
+    
+    st.caption("Test and tune LLM prompts for DRI indicator detection")
 
 @st.cache_data(ttl=300)
 def load_residents(_session):
@@ -176,14 +211,16 @@ if session:
                     ),
                     clinical_rules AS (
                         SELECT LISTAGG(
-                            DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || 
-                            ' [Type:' || DEFICIT_TYPE || ', Expiry:' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 'd, Lookback:' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') || ']' ||
-                            ' Keywords:' || COALESCE(ARRAY_TO_STRING(KEYWORDS, ','), 'N/A') ||
-                            ' Rules:' || COALESCE(TO_VARCHAR(RULES_JSON), '{{}}'),
-                            '\\n\\n'
-                        ) WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
-                        FROM AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES
-                        WHERE IS_ACTIVE = TRUE
+                            '=== ' || DEFICIT_ID || ' - ' || DEFICIT_NAME || ' ===' ||
+                            '\nDEFICIT_TYPE: ' || DEFICIT_TYPE || 
+                            '\nEXPIRY_DAYS: ' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 
+                            '\nRENEWAL_REMINDER_DAYS: ' || COALESCE(TO_VARCHAR(RENEWAL_REMINDER_DAYS), '7') ||
+                            '\nLOOKBACK_DAYS_HISTORIC: ' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') ||
+                            '\nRULES_JSON: ' || COALESCE(TO_VARCHAR(RULES_JSON), '[]'),
+                            '\n\n'
+                        ) WITHIN GROUP (ORDER BY DEFICIT_ID) as rules_text
+                        FROM AGEDCARE.AGEDCARE.DRI_RULES
+                        WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
                     ),
                     full_context AS (
                         SELECT 
@@ -296,14 +333,16 @@ if session:
                 ),
                 clinical_rules AS (
                     SELECT LISTAGG(
-                        DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || 
-                        ' [Type:' || DEFICIT_TYPE || ', Expiry:' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 'd, Lookback:' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') || ']' ||
-                        ' Keywords:' || COALESCE(ARRAY_TO_STRING(KEYWORDS, ','), 'N/A') ||
-                        ' Rules:' || COALESCE(TO_VARCHAR(RULES_JSON), '{{}}'),
+                        '=== ' || DEFICIT_ID || ' - ' || DEFICIT_NAME || ' ===' ||
+                        '\nDEFICIT_TYPE: ' || DEFICIT_TYPE || 
+                        '\nEXPIRY_DAYS: ' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 
+                        '\nRENEWAL_REMINDER_DAYS: ' || COALESCE(TO_VARCHAR(RENEWAL_REMINDER_DAYS), '7') ||
+                        '\nLOOKBACK_DAYS_HISTORIC: ' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') ||
+                        '\nRULES_JSON: ' || COALESCE(TO_VARCHAR(RULES_JSON), '[]'),
                         ' || '
-                    ) WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
-                    FROM AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES
-                    WHERE IS_ACTIVE = TRUE
+                    ) WITHIN GROUP (ORDER BY DEFICIT_ID) as rules_text
+                    FROM AGEDCARE.AGEDCARE.DRI_RULES
+                    WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
                 )
                 SELECT 
                     LENGTH(COALESCE((SELECT notes_text FROM resident_notes), '')) +
@@ -362,14 +401,16 @@ if session:
                 ),
                 clinical_rules AS (
                     SELECT LISTAGG(
-                        DRI_DEFICIT_ID || ' - ' || DEFICIT_NAME || 
-                        ' [Type:' || DEFICIT_TYPE || ', Expiry:' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 'd, Lookback:' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') || ']' ||
-                        ' Keywords:' || COALESCE(ARRAY_TO_STRING(KEYWORDS, ','), 'N/A') ||
-                        ' Rules:' || COALESCE(TO_VARCHAR(RULES_JSON), '{{}}'),
+                        '=== ' || DEFICIT_ID || ' - ' || DEFICIT_NAME || ' ===' ||
+                        '\\nDEFICIT_TYPE: ' || DEFICIT_TYPE || 
+                        '\\nEXPIRY_DAYS: ' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 
+                        '\\nRENEWAL_REMINDER_DAYS: ' || COALESCE(TO_VARCHAR(RENEWAL_REMINDER_DAYS), '7') ||
+                        '\\nLOOKBACK_DAYS_HISTORIC: ' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') ||
+                        '\\nRULES_JSON: ' || COALESCE(TO_VARCHAR(RULES_JSON), '[]'),
                         '\\n\\n'
-                    ) WITHIN GROUP (ORDER BY DRI_DEFICIT_ID) as rules_text
-                    FROM AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES
-                    WHERE IS_ACTIVE = TRUE
+                    ) WITHIN GROUP (ORDER BY DEFICIT_ID) as rules_text
+                    FROM AGEDCARE.AGEDCARE.DRI_RULES
+                    WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
                 ),
                 full_context AS (
                     SELECT 

@@ -156,23 +156,25 @@ def get_resident_context(session, resident_id: int, max_notes: int = 15, max_obs
 
 def get_rag_indicators(session) -> str:
     indicators = session.sql("""
-        SELECT DEFICIT_ID, DEFICIT_NAME, DEFINITION, DEFICIT_TYPE, 
-               EXPIRY_DAYS, KEYWORDS
+        SELECT DEFICIT_ID, DEFICIT_NAME, DEFICIT_TYPE, 
+               EXPIRY_DAYS, RENEWAL_REMINDER_DAYS, LOOKBACK_DAYS_HISTORIC,
+               TO_JSON(RULES_JSON) as RULES_JSON
         FROM AGEDCARE.AGEDCARE.DRI_RULES
         WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
         ORDER BY DEFICIT_ID
     """).collect()
     
-    indicator_text = []
+    indicator_text = ["=== DRI_RULES TABLE ==="]
     for ind in indicators:
-        keywords_str = ', '.join(ind['KEYWORDS']) if ind['KEYWORDS'] else 'N/A'
         indicator_text.append(f"""
-{ind['DEFICIT_ID']} - {ind['DEFICIT_NAME']}
-  Type: {ind['DEFICIT_TYPE']}
-  Definition: {ind['DEFINITION']}
-  Expiry Days: {ind['EXPIRY_DAYS'] or 'N/A (chronic)'}
-  Keywords: {keywords_str}
-""")
+DEFICIT_ID: {ind['DEFICIT_ID']}
+DEFICIT_NAME: {ind['DEFICIT_NAME']}
+DEFICIT_TYPE: {ind['DEFICIT_TYPE']}
+EXPIRY_DAYS: {ind['EXPIRY_DAYS'] or 0}
+RENEWAL_REMINDER_DAYS: {ind['RENEWAL_REMINDER_DAYS'] or 7}
+LOOKBACK_DAYS_HISTORIC: {ind['LOOKBACK_DAYS_HISTORIC'] or 'all'}
+RULES_JSON: {ind['RULES_JSON'] or '[]'}
+---""")
     return "\n".join(indicator_text)
 
 def calculate_dri_score(session, resident_id: int):

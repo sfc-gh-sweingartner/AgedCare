@@ -598,45 +598,74 @@ Per-client assessment form mappings.
 | CREATED_TIMESTAMP | TIMESTAMP_NTZ | When created |
 
 #### DRI_PROMPT_VERSIONS
-Stores prompt templates and versions.
+Stores prompt templates and versions with auto-incrementing version numbers.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | PROMPT_ID | VARCHAR | Primary key (UUID) |
-| VERSION_NUMBER | VARCHAR | e.g., v1.0, v1.1 |
+| VERSION_NUMBER | VARCHAR | Auto-increment format: v0001, v0002, etc. |
 | PROMPT_TEXT | TEXT | Full prompt template |
 | DESCRIPTION | TEXT | What changed |
 | CREATED_BY | VARCHAR | Who created |
 | CREATED_TIMESTAMP | TIMESTAMP_NTZ | When created |
 | IS_ACTIVE | BOOLEAN | Currently in production |
 
-#### DRI_RAG_INDICATORS
-Knowledge base for RAG retrieval.
+**Prompt Version Auto-Increment:** When saving a new prompt version, the system automatically assigns the next version number (e.g., if v0007 is the highest, the next save creates v0008).
+
+#### DRI_RULES (Unified Rules Table)
+Single source of truth for all 33 deficit detection rules with per-deficit versioning.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| INDICATOR_ID | VARCHAR | e.g., RESP_01 |
-| DEFICIT_ID | VARCHAR | Maps to existing deficit |
-| INDICATOR_NAME | VARCHAR | Display name |
-| DEFINITION | TEXT | Full clinical definition |
-| KEYWORDS | VARIANT | Array of related terms |
-| INCLUSION_CRITERIA | TEXT | When to flag |
-| EXCLUSION_CRITERIA | TEXT | When NOT to flag |
-| TEMPORAL_TYPE | VARCHAR | acute, chronic, recurrent |
-| DEFAULT_EXPIRY_DAYS | NUMBER | For acute deficits |
-| EXAMPLES | VARIANT | Positive/negative examples |
+| RULE_ID | VARCHAR(36) | Primary key (UUID) |
+| VERSION_NUMBER | VARCHAR(20) | Per-deficit version (e.g., D001-0001, D001-0002) |
+| VERSION_DESCRIPTION | TEXT | Description of version changes |
+| IS_CURRENT_VERSION | BOOLEAN | TRUE for the active version of each deficit |
+| DEFICIT_NUMBER | INTEGER | Deficit number (1-33) |
+| DEFICIT_ID | VARCHAR(10) | e.g., D001, D002 |
+| DOMAIN | VARCHAR(100) | Clinical domain (Chronic Diseases, Geriatric Syndrome, etc.) |
+| DEFICIT_NAME | VARCHAR(100) | Human-readable name |
+| DEFICIT_TYPE | VARCHAR(20) | PERSISTENT or FLUCTUATING |
+| EXPIRY_DAYS | INTEGER | 0 = never expires (PERSISTENT), >0 = days until expiry |
+| LOOKBACK_DAYS_HISTORIC | VARCHAR(20) | 'all', '1', '7', '90', '365', etc. |
+| RENEWAL_REMINDER_DAYS | INTEGER | Days before expiry to prompt renewal (default 7) |
+| DATA_SOURCES | TEXT | Where to look for evidence |
+| KEYWORDS_TO_SEARCH | TEXT | Comma-separated keywords |
+| RULES_JSON | VARIANT | Complex rule logic (JSON) |
+| IS_ACTIVE | BOOLEAN | Whether rule is active |
 
-#### DRI_RAG_DECISIONS
-Historical decisions for RAG learning.
+**Per-Deficit Versioning:** When a deficit rule is updated, a new version is created with the next incremental version number (e.g., D001-0001 → D001-0002). The old version is retained but marked IS_CURRENT_VERSION = FALSE.
+
+#### DRI_CLINICAL_DECISIONS
+Stores clinical override decisions at the resident + indicator level.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| DECISION_ID | VARCHAR | Primary key |
+| DECISION_ID | VARCHAR(36) | Primary key (UUID) |
+| RESIDENT_ID | NUMBER | Foreign key to resident |
+| CLIENT_SYSTEM_KEY | VARCHAR(100) | Client identifier |
+| DEFICIT_ID | VARCHAR(10) | e.g., D001, D002 |
+| DEFICIT_NAME | VARCHAR(100) | Human-readable name |
+| DECISION_TYPE | VARCHAR(20) | CONFIRMED or REJECTED |
+| DECISION_REASON | TEXT | Clinical notes/rationale |
+| DEFICIT_TYPE | VARCHAR(20) | PERSISTENT or FLUCTUATING |
+| DEFAULT_EXPIRY_DAYS | INTEGER | From rule definition |
+| OVERRIDE_EXPIRY_DAYS | INTEGER | If nurse overrides duration |
+| DECISION_DATE | DATE | When decision was made |
+| EXPIRY_DATE | DATE | NULL = permanent, or calculated expiry |
+| REVIEW_REQUIRED | BOOLEAN | Should prompt for renewal? |
+| DECIDED_BY | VARCHAR(100) | User who made decision |
+| STATUS | VARCHAR(20) | ACTIVE, EXPIRED, SUPERSEDED |
+
+#### DRI_KEYWORD_MASTER_LIST
+Keywords stored for reference but **not used for detection** (LLM uses prompts instead).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| KEYWORD_ID | VARCHAR | Primary key |
 | DEFICIT_ID | VARCHAR | Which indicator |
-| SOURCE_TEXT | TEXT | The text analyzed |
-| DECISION | VARCHAR | APPROVED, REJECTED |
-| REASONING | TEXT | Why decision made |
-| CREATED_TIMESTAMP | TIMESTAMP_NTZ | When recorded |
+| KEYWORD | VARCHAR | Keyword text |
+| IS_ACTIVE | BOOLEAN | Whether active |
 
 ### 3.2 Existing Output Tables (Schema Preserved)
 
@@ -759,38 +788,46 @@ DRI Intelligence POC (Implemented)
 - Processing time and model used
 - Source traceability through evidence array
 
-#### Page 5: Feedback Loop (NEW - v2.0)
-This page enables continuous prompt improvement by analyzing rejection patterns and using Cortex AI to suggest prompt enhancements.
+#### Page 5: Feedback Loop (Enhanced v2.2)
+This page enables **continuous prompt improvement** by analyzing rejection patterns and using Cortex AI to suggest prompt enhancements. The AI now has access to both the prompt text AND RAG indicator definitions, allowing it to suggest fixes to either.
 
-**Section 1: Indicator Rejection Rates**
+**Filters (3-column layout):**
+- **Prompt Version**: Select which prompt version to analyze (defaults to latest)
+- **Facility Filter**: Filter by specific CLIENT_SYSTEM_KEY or "All Facilities"
+- **Time Period**: All Time, Last 7 days, Last 30 days, Last 90 days
+
+**Section 1: Indicator Rejection Stats**
 - Overview metrics: Total reviews, Approval rate, Rejection rate
 - Bar chart showing rejection rate per indicator (e.g., D008 Diabetes: 15% reject, D025 Depression: 12% reject)
-- Optional filters: Prompt version, Facility (CLIENT_SYSTEM_KEY)
-- Drill-down: Click indicator to see list of rejections with reasons
+- Query limits increased to 500 for base stats, 200 for detailed rejections
 
-**Section 2: Rejection Reason Themes**
-- Uses Cortex AI to cluster rejection reasons into themes
-- Example themes: "Medicine-based diagnosis" (45 rejections), "Insufficient evidence" (12 rejections)
-- Each theme shows:
-  - Representative rejection reasons
-  - Affected indicators
-  - Frequency count
+**Section 2: Detailed Rejections Table**
+- Full context for each rejection:
+  - **Indicator ID & Name**: Which indicator was rejected
+  - **Resident ID**: Which resident's analysis
+  - **LLM Reasoning**: The AI's original reasoning (from RAW_RESPONSE)
+  - **LLM Confidence**: The AI's confidence level (high/medium/low)
+  - **Human Rejection Reason**: Why the reviewer rejected it
+- Uses `LATERAL FLATTEN` to extract indicator-level data from LLM response JSON
 
 **Section 3: AI Prompt Improvement Suggestions**
 - Shows **Current Active Prompt** in expandable viewer for context
-- Cortex AI analyzes rejection patterns AGAINST the actual prompt text
-- Output format:
-  - **Problem Summary**: Root causes identified from rejection patterns
-  - **🔧 Prompt Text to Edit/Replace**: Specific problematic sections from current prompt
-    - Shows original text to remove/replace (verbatim from prompt)
-    - Provides suggested replacement text
-    - Lists affected indicators (e.g., D008, D025, D014)
-  - **➕ Additional Text to Add**: New instructions (only if edits aren't sufficient)
-    - Where to add in prompt
-    - Rationale for addition
+- Shows **RAG Indicator Definitions** - AI now sees the full indicator context
+- Cortex AI analyzes rejection patterns against BOTH prompt text AND RAG definitions
+- Output format with **location badges**:
+  - **📝 Prompt Fix**: Issue is in the prompt instructions
+  - **📚 RAG Definition Fix**: Issue is in the indicator definition
+  - For each issue: problem description, suggested change, affected indicators
   - **📈 Expected Impact**: Estimated reduction in rejections
-- Next step guidance: "Go to Prompt Engineering page, find and replace the problematic text"
-- AI prioritizes identifying problematic existing text over suggesting additions
+- Up to 150 rejection entries sent to AI for analysis
+
+**Workflow:**
+1. Run batch tests in Batch Testing page
+2. Review and approve/reject indicators in Review Queue
+3. Accumulate enough rejections (ideally 20+)
+4. Come here to analyze patterns and get AI suggestions
+5. Apply suggestions in Prompt Engineering (for prompt) or Configuration > DRI Rules (for RAG)
+6. Re-test to measure improvement
 
 #### Page 5: Configuration (IMPLEMENTED - 5 Tabs)
 - **Client Config Tab**: Client details, status, CONFIG_JSON viewer
@@ -1118,7 +1155,71 @@ The following requirements from the DRI specification are **documented but not y
 
 ---
 
-## Appendix C: Version History
+## Appendix C: Clinical Decision Override System
+
+This appendix documents the clinical decision override workflow that allows nurses to confirm or reject LLM-detected indicators with time-bound validity.
+
+### C.1 Decision Types
+
+| Decision Type | When to Use | Temporal Behavior |
+|---------------|-------------|-------------------|
+| **CONFIRMED** | Nurse agrees indicator is clinically accurate | Follows indicator's default expiry (or custom override) |
+| **REJECTED** | AI detected incorrectly (false positive) | Suppresses re-detection for specified duration (default: 90 days) |
+
+**Note:** ACKNOWLEDGED was removed and merged with CONFIRMED to simplify training for 10,000+ nurses.
+
+### C.2 Duration Override Rules
+
+| Indicator Type | Decision | Duration Options |
+|----------------|----------|------------------|
+| PERSISTENT | CONFIRMED | Permanent (no override needed) |
+| PERSISTENT | REJECTED | Default: 90 days, Options: 7d, 30d, 90d, 1 year, Permanent |
+| FLUCTUATING | CONFIRMED | Default from rule, can extend up to 365 days |
+| FLUCTUATING | REJECTED | Default: 90 days, Options: 7d, 30d, 90d, 1 year, Permanent |
+
+### C.3 Review Queue Scenarios
+
+The review queue handles three scenarios with smart renewal recommendations:
+
+#### Scenario A: New Indicator (Never Seen Before)
+- AI detects indicator for first time for this resident
+- Show: Recommendation (PERSISTENT vs FLUCTUATING), suggested duration
+- Actions: **CONFIRM** (with optional custom duration), **REJECT** (with duration to suppress)
+
+#### Scenario B: Existing Indicator (Already Decided)
+- AI detects indicator that nurse already confirmed
+- For PERSISTENT: Mark as "Already confirmed - permanent" (no action needed)
+- For FLUCTUATING: Show last evidence dates, expiry date
+- Actions: EXTEND (reset expiry), REMOVE (end early)
+
+#### Scenario C: Renewal Required (Approaching Expiry)
+- A confirmed FLUCTUATING indicator is approaching expiry
+- Triggered by: `EXPIRY_DATE - RENEWAL_REMINDER_DAYS <= CURRENT_DATE`
+- Smart Recommendation:
+  - If recent evidence exists → "Evidence found. Recommend: RENEW"
+  - If no recent evidence → "No recent evidence. Recommend: LET EXPIRE"
+- Actions: RENEW (extend), LET EXPIRE (do nothing), CUSTOM duration
+
+### C.4 DRI_RULES Versioning System
+
+The `DRI_RULES` table uses **per-deficit versioning** to track changes to individual deficit rules:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Version Number | D001-0001 | Deficit ID + 4-digit version (auto-increment) |
+| First Version | D001-0001 | Initial rule for D001 (Respiratory) |
+| Updated Version | D001-0002 | Second version after edit |
+
+When a deficit rule is edited and saved, the system:
+1. Marks the current version as `IS_CURRENT_VERSION = FALSE`
+2. Creates a new row with the next version number
+3. Sets the new row as `IS_CURRENT_VERSION = TRUE`
+
+All historical versions are retained for audit purposes.
+
+---
+
+## Appendix D: Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
@@ -1132,10 +1233,13 @@ The following requirements from the DRI specification are **documented but not y
 | 1.7 | 2026-02-17 | Architecture simplification - removed TruLens, added approval-based metrics |
 | 1.8 | 2026-02-18 | Enhanced rejection workflow: Added DRI_INDICATOR_REJECTIONS table for granular indicator-level rejection feedback. Review Queue now supports two-phase rejection: select indicators via checkboxes, provide reason for each. STATUS includes PARTIAL_REJECT. Analysis Results shows full batch ID (not truncated). |
 | 1.9 | 2026-02-22 | **Business Rules Integration**: Added Appendix B with complete 33-deficit specification from DRI requirements. Documented PERSISTENT vs FLUCTUATING types, rule types (keyword_search, specific_value, aggregation), inclusion/exclusion filters, temporal logic. Added Outstanding Requirements section tracking 5 pending items. |
+| 2.0 | 2026-02-22 | **Feedback Loop Page v2.0**: Initial feedback loop with rejection analysis and AI suggestions |
+| 2.1 | 2026-02-24 | **Unified DRI_RULES Table**: Replaced multiple tables with unified DRI_RULES. Added DRI_CLINICAL_DECISIONS. Per-deficit versioning (D001-0001 format). |
+| 2.2 | 2026-02-24 | **Enhanced Feedback Loop v2.2**: Added time period filter (7/30/90 days), RAG indicator context for AI analysis, increased query limits (500/200/150), full LLM context in rejections (reasoning, confidence), location badges for AI suggestions (📝 Prompt vs 📚 RAG Definitions). |
 
 ---
 
-*Document Version: 2.0*  
+*Document Version: 2.2*  
 *Created: 2025-01-27*  
-*Updated: 2026-02-22 (Feedback Loop page for rejection analysis & prompt improvement)*  
+*Updated: 2026-02-24*  
 *Status: Approved*

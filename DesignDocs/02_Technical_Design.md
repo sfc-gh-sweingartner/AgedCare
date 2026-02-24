@@ -310,7 +310,7 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_CLIENT_INDICATOR_OVERRIDES (
 -- DRI Prompt Versions
 CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS (
     PROMPT_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
-    VERSION_NUMBER VARCHAR(32),
+    VERSION_NUMBER VARCHAR(32),  -- Auto-increment format: v0001, v0002, etc.
     PROMPT_TEXT VARCHAR(16777216),
     DESCRIPTION VARCHAR(16777216),
     CREATED_BY VARCHAR(256),
@@ -319,31 +319,124 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS (
     PRIMARY KEY (PROMPT_ID)
 );
 
--- DRI RAG Indicators (Knowledge Base)
-CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_RAG_INDICATORS (
-    INDICATOR_ID VARCHAR(64) NOT NULL,
-    DEFICIT_ID VARCHAR(64),
-    INDICATOR_NAME VARCHAR(256),
-    DEFINITION VARCHAR(16777216),
-    KEYWORDS VARIANT,
-    INCLUSION_CRITERIA VARCHAR(16777216),
-    EXCLUSION_CRITERIA VARCHAR(16777216),
-    TEMPORAL_TYPE VARCHAR(32),
-    DEFAULT_EXPIRY_DAYS NUMBER,
-    EXAMPLES VARIANT,
-    PRIMARY KEY (INDICATOR_ID)
+-- Prompt Version Auto-Increment: When saving a new prompt version, the system
+-- automatically assigns the next version number (e.g., v0007 → v0008)
+
+-- DRI_RULES (Unified Rules Table - v2.0)
+-- Single source of truth for all 33 deficit detection rules with per-deficit versioning
+CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_RULES (
+    RULE_ID VARCHAR(36) DEFAULT UUID_STRING(),
+    
+    -- Version control (per-deficit versioning)
+    VERSION_NUMBER VARCHAR(20) NOT NULL,  -- Format: D001-0001, D001-0002, etc.
+    VERSION_DESCRIPTION TEXT,
+    IS_CURRENT_VERSION BOOLEAN DEFAULT FALSE,
+    
+    -- Core identification (from requirements)
+    DEFICIT_NUMBER INTEGER NOT NULL,
+    DEFICIT_ID VARCHAR(10) NOT NULL,  -- D001, D002, etc.
+    DOMAIN VARCHAR(100) NOT NULL,
+    DEFICIT_NAME VARCHAR(100) NOT NULL,
+    
+    -- Temporal classification (from requirements)
+    DEFICIT_TYPE VARCHAR(20) NOT NULL,  -- 'PERSISTENT' or 'FLUCTUATING'
+    EXPIRY_DAYS INTEGER NOT NULL DEFAULT 0,  -- 0 = never expires (PERSISTENT)
+    LOOKBACK_DAYS_HISTORIC VARCHAR(20),  -- 'all', '1', '7', '90', '365', etc.
+    LOOKBACK_DAYS_DELTA INTEGER DEFAULT 1,  -- Days to look back for daily delta
+    
+    -- Renewal settings (configurable per indicator)
+    RENEWAL_REMINDER_DAYS INTEGER DEFAULT 7,  -- Days before expiry to prompt renewal
+    
+    -- Detection configuration (structured columns for easy editing)
+    DATA_SOURCES TEXT,  -- Where to look for evidence
+    KEYWORDS_TO_SEARCH TEXT,  -- Comma-separated keywords (for display only, LLM uses prompts)
+    EXCLUSION_KEYWORDS TEXT,  -- Keywords that should NOT trigger this indicator
+    
+    -- Rule logic (human-readable from requirements)
+    INITIAL_LOAD_RULE TEXT,  -- Full rule description for initial load
+    DAILY_DELTA_RULE TEXT,  -- Full rule description for daily delta
+    
+    -- Definition for display
+    DEFINITION TEXT,  -- Human-readable description for nurses
+    
+    -- Complex rule logic (JSON only for nested/hierarchical rules)
+    RULES_JSON VARIANT,  -- Only used for complex rules like aggregation, multi-step logic
+    
+    -- Metadata
+    IS_ACTIVE BOOLEAN DEFAULT TRUE,
+    CREATED_BY VARCHAR(100),
+    CREATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    MODIFIED_BY VARCHAR(100),
+    MODIFIED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    
+    PRIMARY KEY (RULE_ID)
 );
 
--- DRI RAG Decisions (Historical Decisions for Learning)
-CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_RAG_DECISIONS (
-    DECISION_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
-    DEFICIT_ID VARCHAR(64),
-    SOURCE_TEXT VARCHAR(16777216),
-    DECISION VARCHAR(32),
-    REASONING VARCHAR(16777216),
-    CREATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+COMMENT ON TABLE AGEDCARE.AGEDCARE.DRI_RULES IS 
+'Unified rules table for all 33 DRI deficits with per-deficit versioning. 
+Format: D001-0001, D001-0002, etc. Replaces DRI_RAG_INDICATORS and DRI_BUSINESS_RULES.';
+
+-- DRI_CLINICAL_DECISIONS (v2.0)
+-- Stores nurse clinical override decisions at resident + indicator level
+CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS (
+    DECISION_ID VARCHAR(36) DEFAULT UUID_STRING(),
+    
+    -- Resident identification
+    RESIDENT_ID NUMBER NOT NULL,
+    CLIENT_SYSTEM_KEY VARCHAR(100),
+    
+    -- Indicator identification
+    DEFICIT_ID VARCHAR(10) NOT NULL,  -- D001, D002, etc.
+    DEFICIT_NAME VARCHAR(100) NOT NULL,
+    
+    -- Decision details (simplified: only CONFIRMED or REJECTED)
+    DECISION_TYPE VARCHAR(20) NOT NULL,  -- 'CONFIRMED' or 'REJECTED'
+    DECISION_REASON TEXT,  -- Clinical notes/rationale
+    
+    -- Temporal validity
+    DEFICIT_TYPE VARCHAR(20) NOT NULL,  -- 'PERSISTENT' or 'FLUCTUATING' (from rule)
+    DEFAULT_EXPIRY_DAYS INTEGER,  -- From rule definition
+    OVERRIDE_EXPIRY_DAYS INTEGER,  -- If nurse overrides duration
+    
+    -- Decision dates
+    DECISION_DATE DATE NOT NULL DEFAULT CURRENT_DATE(),
+    EXPIRY_DATE DATE,  -- NULL = permanent, calculated from DECISION_DATE + expiry days
+    
+    -- Review settings
+    REVIEW_REQUIRED BOOLEAN DEFAULT FALSE,  -- Should prompt for renewal before expiry?
+    RENEWAL_REMINDER_DAYS INTEGER DEFAULT 7,  -- Days before expiry to show in review queue
+    
+    -- Evidence at time of decision
+    EVIDENCE_SNAPSHOT VARIANT,  -- Store the evidence that led to this decision
+    
+    -- Audit
+    DECIDED_BY VARCHAR(100) NOT NULL,
+    DECIDED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    
+    -- Status
+    STATUS VARCHAR(20) DEFAULT 'ACTIVE',  -- 'ACTIVE', 'EXPIRED', 'SUPERSEDED'
+    SUPERSEDED_BY VARCHAR(36),  -- If a newer decision replaces this one
+    
     PRIMARY KEY (DECISION_ID)
 );
+
+COMMENT ON TABLE AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS IS 
+'Stores nurse clinical override decisions (CONFIRMED or REJECTED) at resident+indicator level. 
+Supports time-bound validity for FLUCTUATING indicators and permanent decisions for PERSISTENT.';
+
+-- DRI_KEYWORD_MASTER_LIST (Reference only - not used for detection)
+-- Keywords stored for reference but LLM uses prompts for actual detection
+CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST (
+    KEYWORD_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
+    DEFICIT_ID VARCHAR(10) NOT NULL,
+    KEYWORD VARCHAR(256) NOT NULL,
+    IS_ACTIVE BOOLEAN DEFAULT TRUE,
+    CREATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    PRIMARY KEY (KEYWORD_ID)
+);
+
+COMMENT ON TABLE AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST IS 
+'Keywords stored for reference only. LLM detection uses prompts, not keyword matching.';
 
 -- DRI Audit Log (All System Events)
 CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_AUDIT_LOG (
@@ -356,49 +449,11 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_AUDIT_LOG (
     PRIMARY KEY (LOG_ID)
 );
 
--- DRI Business Rules (v1.9 - Stores complex business rules for all 33 deficits)
-CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES (
-    DRI_DEFICIT_ID VARCHAR(10) NOT NULL,
-    DEFICIT_NAME VARCHAR(256) NOT NULL,
-    DOMAIN VARCHAR(64),
-    DEFICIT_TYPE VARCHAR(20) NOT NULL DEFAULT 'PERSISTENT',  -- PERSISTENT or FLUCTUATING
-    EXPIRY_DAYS NUMBER DEFAULT 0,
-    LOOKBACK_DAYS_HISTORIC VARCHAR(20) DEFAULT 'all',  -- 'all', or number like '1', '7', '90', '365'
-    RULES_JSON VARIANT NOT NULL,  -- Array of rule objects with rule_type, source_type, functions, threshold
-    KEYWORDS ARRAY,               -- Simple keyword list for display
-    IS_ACTIVE BOOLEAN DEFAULT TRUE,
-    CREATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    MODIFIED_TIMESTAMP TIMESTAMP_NTZ,
-    VERSION VARCHAR(32) DEFAULT 'v1.0',
-    PRIMARY KEY (DRI_DEFICIT_ID)
-);
-
-COMMENT ON TABLE AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES IS 
-'Complete business rules for 33 DRI deficits including rule types (keyword_search, specific_value, aggregation), 
-inclusion/exclusion filters, temporal logic, and thresholds. Replaces simple keyword lists.';
-
--- DRI Rule State (v1.9 - Tracks current state per resident per rule)
-CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_RULE_STATE (
-    STATE_ID VARCHAR(36) NOT NULL DEFAULT UUID_STRING(),
-    RESIDENT_ID NUMBER NOT NULL,
-    DEFICIT_ID VARCHAR(10) NOT NULL,
-    RULE_NUMBER NUMBER,
-    RULE_STATUS VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',  -- ACTIVE, EXPIRED, CLEARED
-    FIRST_TRIGGERED_DATE DATE,
-    LAST_TRIGGERED_DATE DATE,
-    EXPIRY_DATE DATE,
-    TRIGGER_COUNT NUMBER DEFAULT 1,
-    SOURCE_EVIDENCE VARIANT,  -- JSON array of source references
-    CREATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    MODIFIED_TIMESTAMP TIMESTAMP_NTZ,
-    PRIMARY KEY (STATE_ID),
-    UNIQUE (RESIDENT_ID, DEFICIT_ID, RULE_NUMBER)
-)
-CHANGE_TRACKING = TRUE;
-
-COMMENT ON TABLE AGEDCARE.AGEDCARE.DRI_RULE_STATE IS 
-'Tracks current and historical state for each resident+deficit+rule combination. 
-Supports FLUCTUATING deficits with temporal expiry logic.';
+-- Note: The following tables have been REMOVED in v2.0:
+-- - DRI_RAG_INDICATORS (replaced by DRI_RULES)
+-- - DRI_RAG_DECISIONS (replaced by DRI_CLINICAL_DECISIONS)
+-- - DRI_BUSINESS_RULES (replaced by DRI_RULES)
+-- - DRI_RULE_STATE (merged into DRI_CLINICAL_DECISIONS)
 ```
 
 ### 2.4 Quality Metrics Tables & Views
@@ -905,11 +960,59 @@ dri-intelligence/
 # - Filter by status
 ```
 
-### 5.4 Page 5: Configuration (Client Management) - IMPLEMENTED
+### 5.4 Page 4: Feedback Loop (NEW v2.2 - Enhanced)
+
+The Feedback Loop page enables **continuous prompt improvement** by analyzing rejection patterns and using Cortex AI to suggest targeted improvements to both prompt text and RAG indicator definitions.
+
+**Filters (3-column layout):**
+- **Prompt Version**: Select which prompt version to analyze (defaults to v1.6)
+- **Facility Filter**: Filter by specific facility or "All Facilities"
+- **Time Period**: All Time, Last 7 days, Last 30 days, Last 90 days
+
+**Section 1: Indicator Rejection Stats**
+- Overview metrics: Total reviews, Approval rate, Rejection rate
+- Bar chart showing rejection counts by indicator
+- Query uses `LATERAL FLATTEN` to extract LLM reasoning and confidence from RAW_RESPONSE
+
+**Section 2: Detailed Rejections Table**
+- Shows up to 200 rejections with full context:
+  - Indicator ID and Name
+  - Resident ID
+  - LLM Reasoning (from RAW_RESPONSE:indicators[].reasoning)
+  - LLM Confidence (from RAW_RESPONSE:indicators[].confidence)
+  - Human Rejection Reason
+- SQL joins DRI_INDICATOR_REJECTIONS → DRI_REVIEW_QUEUE → DRI_LLM_ANALYSIS
+
+**Section 3: AI Prompt Analysis (Key Feature)**
+- Loads current active prompt from DRI_PROMPT_VERSIONS
+- Loads RAG indicator definitions from DRI_RAG_INDICATORS
+- Sends both to Cortex AI along with rejection data (up to 150 entries)
+- AI output includes:
+  - **Problem sections** with location badge (📝 Prompt or 📚 RAG Definitions)
+  - **Specific text to modify or add**
+  - **Expected impact** estimate
+- AI can now suggest fixes to EITHER the prompt instructions OR the RAG indicator definitions
+
+**Technical Details:**
+```sql
+-- Detailed rejections query with LLM context
+SELECT 
+    ir.INDICATOR_ID, ir.INDICATOR_NAME, ir.REJECTION_REASON,
+    rq.RESIDENT_ID,
+    f.value:reasoning::STRING as LLM_REASONING,
+    f.value:confidence::STRING as LLM_CONFIDENCE
+FROM DRI_INDICATOR_REJECTIONS ir
+JOIN DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
+JOIN DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
+LATERAL FLATTEN(input => lla.RAW_RESPONSE:indicators) f
+WHERE f.value:deficit_id::STRING = ir.INDICATOR_ID
+```
+
+### 5.5 Page 5: Configuration (Client Management) - IMPLEMENTED
 
 This page displays and manages client-specific configurations. Sample data is mocked for the POC to demonstrate multi-tenant configurability.
 
-**Implemented Features (5 Tabs):**
+**Implemented Features (4 Tabs - Updated v2.0):**
 
 1. **Client Config Tab**
    - Client selector dropdown at top
@@ -922,18 +1025,18 @@ This page displays and manages client-specific configurations. Sample data is mo
    - Columns: SOURCE_TABLE, FORM_IDENTIFIER, FIELD_NAME, MAPPED_INDICATOR, MAPPING_TYPE, IS_ACTIVE
    - Detail list showing each mapping with notes
 
-3. **Indicator Overrides Tab**
-   - Read-only table of client-specific indicator overrides
-   - Columns: INDICATOR_ID, OVERRIDE_TYPE, OVERRIDE_VALUE, REASON, IS_ACTIVE
+3. **DRI Rules Tab** (Replaces "RAG Indicators" tab)
+   - Browse all 33 DRI rules from DRI_RULES table
+   - Filter by type (PERSISTENT, FLUCTUATING), domain
+   - Shows VERSION_NUMBER per deficit (e.g., D001-0001)
+   - Editable rule fields with save capability
+   - Per-deficit versioning: editing creates new version (D001-0001 → D001-0002)
 
-4. **RAG Indicators Tab**
-   - Browse all 33 DRI indicators
-   - Filter by temporal type (All, chronic, acute, recurrent)
-   - Detail view with definition, inclusion/exclusion criteria
+4. **Processing Settings Tab** (see Section 5.5)
 
-5. **Processing Settings Tab** (see Section 5.5)
+**Note:** The "Indicator Overrides" tab has been removed. Override functionality is now handled via DRI_CLINICAL_DECISIONS table.
 
-### 5.5 Processing Settings Tab (IMPLEMENTED)
+### 5.5 Processing Settings Tab (IMPLEMENTED - Updated v2.0)
 
 The Processing Settings tab controls production batch processing configuration:
 
@@ -943,23 +1046,27 @@ The Processing Settings tab controls production batch processing configuration:
    - Dropdown with models: claude-sonnet-4-5, claude-opus-4-5, claude-haiku-4-5, claude-3-5-sonnet, claude-3-7-sonnet, mistral-large2, llama3.1-70b, llama3.1-405b, llama3.3-70b, snowflake-llama-3.3-70b, deepseek-r1
    - "Save model for production" button updates CONFIG_JSON:production_settings:model
 
-2. **Production Prompt Configuration**
+2. **Production Prompt Configuration** (Simplified v2.0)
+   - **Read-only prompt text display** - Shows the current production prompt
    - "Copy prompt from version" dropdown to load templates from DRI_PROMPT_VERSIONS
-   - "Load template" button copies selected version to editor
-   - Text area for editing production prompt
-   - Version label input for tracking
-   - "Save prompt for production" stores directly in CONFIG_JSON:production_settings:prompt_text
+   - **Single "Save for production" button** - Saves prompt with auto-incremented version (v0001, v0002, etc.)
+   - No manual version entry required
 
-3. **Batch Schedule Configuration**
+3. **Deficit Versions Table** (New v2.0)
+   - Shows current version of each deficit rule
+   - Columns: Deficit ID, Deficit Name, Current Version
+   - Example: D001, Respiratory, D001-0001
+
+4. **Batch Schedule Configuration**
    - Dropdown for nightly batch start time (Midnight through 6 AM)
    - Cron format stored in CONFIG_JSON:production_settings:batch_schedule
    - Info box explaining delta processing
 
-4. **Adaptive Token Sizing**
+5. **Adaptive Token Sizing**
    - Context threshold number input (2,000-20,000 chars, default 6,000)
    - Side-by-side comparison of Standard mode (4,096 tokens) vs Large mode (16,384 tokens)
    - Trade-offs warning explaining threshold impact
-   - "Save for testing" (session only) vs "Save for production" buttons
+   - "Save for production" button
 
 **Configuration JSON Structure:**
 ```json
@@ -1718,9 +1825,9 @@ The warehouse `MYWH` is used ONLY for:
 
 ---
 
-*Document Version: 2.0*  
+*Document Version: 2.2*  
 *Created: 2026-01-28*  
-*Updated: 2026-02-22*  
+*Updated: 2026-02-24*  
 *Status: Approved*
 
 ### Change Log
@@ -1737,3 +1844,5 @@ The warehouse `MYWH` is used ONLY for:
 | 1.8 | 2026-02-18 | **Enhanced Rejection Workflow**: Added DRI_INDICATOR_REJECTIONS table for granular indicator-level rejection feedback. Review Queue now supports two-phase rejection: select indicators via checkboxes, provide reason for each. STATUS column includes PARTIAL_REJECT. Analysis Results shows full batch ID (not truncated). |
 | 1.9 | 2026-02-22 | **Business Rules Integration**: Added DRI_BUSINESS_RULES table for complete 33-deficit rule specifications (rule types, functions, temporal logic, thresholds). Added DRI_RULE_STATE table for tracking per-resident rule state with expiry logic. Updated configuration.py tab 5 to display full business rules. Added Outstanding Requirements indicator in UI. |
 | 2.0 | 2026-02-22 | **Feedback Loop Page**: Renamed analysis_results.py to audit_results.py. Added feedback_loop.py with rejection analysis, reason theme clustering via Cortex AI, and AI prompt improvement suggestions. Added V_INDICATOR_REJECTION_RATES view. |
+| 2.1 | 2026-02-24 | **Unified DRI_RULES Table**: Replaced DRI_RAG_INDICATORS, DRI_RAG_DECISIONS, DRI_BUSINESS_RULES, DRI_RULE_STATE with unified DRI_RULES table. Added DRI_CLINICAL_DECISIONS for nurse overrides. Implemented per-deficit versioning (D001-0001 format). Changed prompt versions to auto-increment (v0001 format). Updated Processing Settings tab: read-only prompt display, single Save button, deficit versions table. |
+| 2.2 | 2026-02-24 | **Enhanced Feedback Loop**: Added Section 5.4 with full Feedback Loop page specification. Features: time period filter (7/30/90 days), RAG indicator context filled for AI analysis, increased limits (500 base, 200 detailed, 150 for AI), full indicator context in rejections (ID, name, LLM reasoning, confidence). AI suggestions now indicate fix location (📝 Prompt or 📚 RAG Definitions). Added "How to use" sections to batch_testing.py. |

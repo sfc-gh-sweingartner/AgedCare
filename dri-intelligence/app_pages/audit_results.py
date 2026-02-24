@@ -11,6 +11,7 @@ This page provides an **audit trail** of all LLM analyses run on residents. Use 
 ### How to Use
 1. **Filter by resident** to see analyses for a specific person
 2. **Filter by batch** to see results from a specific batch run
+3. **Filter by date range** to narrow down to a time period
 3. **Expand each analysis** to see details:
    - Model used and prompt version
    - Processing time
@@ -61,12 +62,31 @@ if session:
         """, session)
         
         if batches is not None and len(batches) > 0:
-            batch_options = ["All"] + [b[:8] + "..." for b in batches['BATCH_RUN_ID'].tolist()]
             batch_ids = ["All"] + batches['BATCH_RUN_ID'].tolist()
-            batch_filter_display = st.selectbox("Filter by batch", batch_options)
-            batch_filter = batch_ids[batch_options.index(batch_filter_display)]
+            batch_filter = st.selectbox("Filter by batch", batch_ids)
         else:
             batch_filter = "All"
+        
+        st.markdown("**Date range**")
+        date_range = execute_query_df("""
+            SELECT MIN(ANALYSIS_TIMESTAMP)::DATE as MIN_DATE, MAX(ANALYSIS_TIMESTAMP)::DATE as MAX_DATE
+            FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+        """, session)
+        
+        if date_range is not None and len(date_range) > 0:
+            min_date = date_range['MIN_DATE'].iloc[0]
+            max_date = date_range['MAX_DATE'].iloc[0]
+            if min_date and max_date:
+                from datetime import datetime, timedelta
+                default_start = max(min_date, max_date - timedelta(days=7))
+                start_date = st.date_input("From", value=default_start, min_value=min_date, max_value=max_date)
+                end_date = st.date_input("To", value=max_date, min_value=min_date, max_value=max_date)
+            else:
+                start_date = None
+                end_date = None
+        else:
+            start_date = None
+            end_date = None
         
         limit = st.slider("Max results", 5, 50, 10)
     
@@ -76,6 +96,10 @@ if session:
             where_clauses.append(f"RESIDENT_ID = {resident_filter}")
         if batch_filter != "All":
             where_clauses.append(f"BATCH_RUN_ID = '{batch_filter}'")
+        if start_date:
+            where_clauses.append(f"ANALYSIS_TIMESTAMP >= '{start_date}'")
+        if end_date:
+            where_clauses.append(f"ANALYSIS_TIMESTAMP < DATEADD(day, 1, '{end_date}')")
         
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         

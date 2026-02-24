@@ -7,18 +7,39 @@ from src.connection_helper import get_snowflake_session, execute_query_df, execu
 with st.expander("How to use this page", expanded=False, icon=":material/help:"):
     st.markdown("""
 ### Purpose
-This page helps **improve prompt accuracy** by analyzing rejection patterns. Use it to understand why indicators are being rejected and get AI-powered suggestions for prompt improvements.
+This is the **continuous improvement hub** for LLM prompt accuracy. It closes the feedback loop by analyzing rejection patterns and using AI to suggest targeted prompt improvements.
 
 ### Sections
-1. **Indicator Rejection Rates**: See which indicators have the highest rejection rates
-2. **Rejection Reason Themes**: AI clusters rejection reasons into common themes
-3. **Prompt Improvement Suggestions**: AI analyzes patterns and suggests prompt changes
+
+| Section | Purpose |
+|---------|---------|
+| **Indicator Rejection Stats** | Overview metrics and bar chart showing which indicators are most frequently rejected |
+| **Detailed Rejections** | Drill-down table with full context: indicator ID, name, LLM reasoning, confidence, and human rejection reason |
+| **AI Prompt Analysis** | Cortex AI analyzes rejection patterns against the current prompt and suggests specific improvements |
+
+### Key Features
+- **Time Period Filter**: Analyze rejections from All Time, Last 7/30/90 days
+- **Facility Filter**: Focus on specific facilities or view all
+- **Prompt Version Filter**: Compare rejection rates across prompt versions
+- **RAG Context Included**: AI sees both the prompt text AND the indicator definitions, so it can suggest fixes to either
+
+### AI Suggestion Output
+The AI provides actionable improvements:
+- **📝 Prompt Fixes**: Specific text to modify in the prompt
+- **📚 RAG Definition Fixes**: Suggested improvements to indicator definitions
+- **Expected Impact**: Estimated reduction in rejection rate
 
 ### Workflow
-1. Run batch tests and review results in Review Queue
-2. Come here to analyze rejection patterns
-3. Review AI suggestions and apply them in Prompt Engineering
-4. Re-test to measure improvement
+1. Run batch tests in **Batch Testing**
+2. Review and approve/reject indicators in **Review Queue**
+3. Come here to analyze why indicators were rejected
+4. Apply AI suggestions in **Prompt Engineering** or **Configuration > DRI Rules**
+5. Re-test to measure improvement
+
+### Tips
+- Focus on indicators with >10% rejection rate first
+- Look for patterns: same rejection reason across multiple indicators
+- After making changes, re-run batch tests and compare approval rates
     """)
 
 session = get_snowflake_session()
