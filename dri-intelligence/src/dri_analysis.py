@@ -156,21 +156,22 @@ def get_resident_context(session, resident_id: int, max_notes: int = 15, max_obs
 
 def get_rag_indicators(session) -> str:
     indicators = session.sql("""
-        SELECT INDICATOR_ID, INDICATOR_NAME, DEFINITION, TEMPORAL_TYPE, 
-               DEFAULT_EXPIRY_DAYS, INCLUSION_CRITERIA, EXCLUSION_CRITERIA
-        FROM AGEDCARE.AGEDCARE.DRI_RAG_INDICATORS
-        ORDER BY INDICATOR_ID
+        SELECT DEFICIT_ID, DEFICIT_NAME, DEFINITION, DEFICIT_TYPE, 
+               EXPIRY_DAYS, KEYWORDS
+        FROM AGEDCARE.AGEDCARE.DRI_RULES
+        WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
+        ORDER BY DEFICIT_ID
     """).collect()
     
     indicator_text = []
     for ind in indicators:
+        keywords_str = ', '.join(ind['KEYWORDS']) if ind['KEYWORDS'] else 'N/A'
         indicator_text.append(f"""
-{ind['INDICATOR_ID']} - {ind['INDICATOR_NAME']}
-  Type: {ind['TEMPORAL_TYPE']}
+{ind['DEFICIT_ID']} - {ind['DEFICIT_NAME']}
+  Type: {ind['DEFICIT_TYPE']}
   Definition: {ind['DEFINITION']}
-  Expiry Days: {ind['DEFAULT_EXPIRY_DAYS'] or 'N/A (chronic)'}
-  Include when: {ind['INCLUSION_CRITERIA']}
-  Exclude when: {ind['EXCLUSION_CRITERIA']}
+  Expiry Days: {ind['EXPIRY_DAYS'] or 'N/A (chronic)'}
+  Keywords: {keywords_str}
 """)
     return "\n".join(indicator_text)
 

@@ -9,7 +9,7 @@ if session:
     with st.expander("How to use this page", expanded=False, icon=":material/help:"):
         st.markdown("""
 ### Purpose
-This is the **administration hub** for configuring the DRI Intelligence system. It contains client settings, form mappings, indicator definitions, and **production deployment settings**.
+This is the **administration hub** for configuring the DRI Intelligence system. It contains client settings, form mappings, and **production deployment settings**.
 
 ### Tabs Overview
 
@@ -17,9 +17,7 @@ This is the **administration hub** for configuring the DRI Intelligence system. 
 |-----|---------|
 | **Client Config** | View/edit client details and full JSON configuration |
 | **Form Mappings** | See how client-specific form fields map to DRI indicators |
-| **Indicator Overrides** | Client-specific customizations to indicator behavior |
-| **RAG Indicators** | Browse all 33 DRI indicator definitions (the knowledge base) |
-| **Clinical Detection Rules** | View/edit keyword rules used by LLM to identify deficits |
+| **DRI Rules** | View/edit all 33 deficit detection rules with versioning |
 | **Processing Settings** | **Configure production model, prompt, and batch schedule** |
 
 ### Processing Settings (Most Important)
@@ -65,7 +63,7 @@ This tab controls what runs during **nightly batch processing**:
     
     st.warning("**Sample data:** The configuration below is mocked for demonstration. Modify these mappings to match your client's specific system.", icon=":material/warning:")
     
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Client config", "Form mappings", "Indicator overrides", "RAG indicators", "Clinical detection rules", "Processing settings"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Client config", "Form mappings", "DRI Rules", "Processing settings"])
     
     with tab1:
         st.subheader("Client configuration")
@@ -134,205 +132,379 @@ This tab controls what runs during **nightly batch processing**:
             st.info("No form mappings found for this client", icon=":material/info:")
     
     with tab3:
-        st.subheader("Indicator overrides")
-        st.caption("Overrides allow clients to customize indicator behavior (thresholds, expiry days, etc.)")
+        st.subheader("DRI Rules")
+        st.caption("Unified deficit detection rules with version control. Rules define how deficits are detected including temporal behavior, keywords, and thresholds.")
         
-        overrides = execute_query_df(f"""
-            SELECT OVERRIDE_ID, CLIENT_SYSTEM_KEY, INDICATOR_ID, OVERRIDE_TYPE,
-                   OVERRIDE_VALUE, REASON, IS_ACTIVE
-            FROM AGEDCARE.AGEDCARE.DRI_CLIENT_INDICATOR_OVERRIDES
-            WHERE CLIENT_SYSTEM_KEY = '{client_system_key}'
-            ORDER BY INDICATOR_ID
+        current_version = execute_query("""
+            SELECT DISTINCT VERSION_NUMBER, VERSION_DESCRIPTION 
+            FROM AGEDCARE.AGEDCARE.DRI_RULES 
+            WHERE IS_CURRENT_VERSION = TRUE
+            LIMIT 1
         """, session)
         
-        if overrides is not None and len(overrides) > 0:
-            st.dataframe(overrides, use_container_width=True)
-        else:
-            st.info("No indicator overrides configured for this client", icon=":material/info:")
-    
-    with tab4:
-        st.subheader("DRI RAG indicators (knowledge base)")
+        if current_version:
+            st.success(f"**Current Version:** {current_version[0]['VERSION_NUMBER']} - {current_version[0]['VERSION_DESCRIPTION'] or 'No description'}", icon=":material/verified:")
         
-        indicators = execute_query_df("""
-            SELECT INDICATOR_ID, INDICATOR_NAME, TEMPORAL_TYPE, DEFAULT_EXPIRY_DAYS,
-                   DEFINITION
-            FROM AGEDCARE.AGEDCARE.DRI_RAG_INDICATORS
-            ORDER BY INDICATOR_ID
+        dri_rules = execute_query_df("""
+            SELECT DEFICIT_NUMBER, DEFICIT_ID, DEFICIT_NAME, DOMAIN, DEFICIT_TYPE, 
+                   EXPIRY_DAYS, RENEWAL_REMINDER_DAYS, LOOKBACK_DAYS_HISTORIC,
+                   KEYWORDS_TO_SEARCH, RULES_JSON, IS_ACTIVE
+            FROM AGEDCARE.AGEDCARE.DRI_RULES
+            WHERE IS_CURRENT_VERSION = TRUE
+            ORDER BY DEFICIT_NUMBER
         """, session)
         
-        if indicators is not None and len(indicators) > 0:
-            st.metric("Total indicators", len(indicators))
-            
-            temporal_filter = st.selectbox("Filter by type", ["All", "chronic", "acute", "recurrent"])
-            
-            if temporal_filter != "All":
-                indicators = indicators[indicators['TEMPORAL_TYPE'] == temporal_filter]
-            
-            st.dataframe(indicators, use_container_width=True)
-            
-            selected_indicator = st.selectbox("View details", indicators['INDICATOR_ID'].tolist())
-            
-            if selected_indicator:
-                detail = execute_query_df(f"""
-                    SELECT * FROM AGEDCARE.AGEDCARE.DRI_RAG_INDICATORS
-                    WHERE INDICATOR_ID = '{selected_indicator}'
-                """, session)
-                
-                if detail is not None and len(detail) > 0:
-                    row = detail.iloc[0]
-                    with st.container(border=True):
-                        st.markdown(f"### {row['INDICATOR_NAME']}")
-                        st.markdown(f"**Definition:** {row['DEFINITION']}")
-                        st.markdown(f"**Type:** {row['TEMPORAL_TYPE']}")
-                        st.markdown(f"**Expiry days:** {row['DEFAULT_EXPIRY_DAYS'] or 'N/A (chronic)'}")
-                        st.markdown(f"**Include when:** {row['INCLUSION_CRITERIA']}")
-                        st.markdown(f"**Exclude when:** {row['EXCLUSION_CRITERIA']}")
-        else:
-            st.info("No indicators found", icon=":material/info:")
-
-    with tab5:
-        st.subheader("Clinical detection rules")
-        
-        with st.container(border=True):
-            st.warning("""
-**⚠️ Outstanding Requirements (5 items not yet implemented):**
-
-| # | Requirement | Status |
-|---|-------------|--------|
-| 1 | **Audit Tables** - Rule applications, scoring decisions, explainability tracking | 🔴 Pending |
-| 2 | **Daily Delta Processing** - Incremental updates with temporal logic (expiry/re-trigger) | 🔴 Pending |
-| 3 | **Version Controlled Config** - Client-specific rules updates without code changes | 🟡 Partial |
-| 4 | **Data Lineage Tracking** - Full traceability from source to output | 🔴 Pending |
-| 5 | **Orchestration Framework** - Scheduled tasks for daily processing | 🔴 Pending |
-
-*These requirements are documented in the Functional Design v1.9 Appendix B.6*
-            """, icon=":material/pending_actions:")
-        
-        st.caption("Business rules define how deficits are detected. Includes rule types (keyword, specific_value, aggregation), temporal logic, and thresholds.")
-        
-        business_rules = execute_query_df("""
-            SELECT DRI_DEFICIT_ID, DEFICIT_NAME, DOMAIN, DEFICIT_TYPE, 
-                   EXPIRY_DAYS, LOOKBACK_DAYS_HISTORIC, 
-                   ARRAY_SIZE(RULES_JSON) as RULE_COUNT,
-                   RULES_JSON
-            FROM AGEDCARE.AGEDCARE.DRI_BUSINESS_RULES
-            ORDER BY DRI_DEFICIT_ID
-        """, session)
-        
-        if business_rules is not None and len(business_rules) > 0:
+        if dri_rules is not None and len(dri_rules) > 0:
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
             with col_m1:
-                st.metric("Total deficits", len(business_rules))
+                st.metric("Total deficits", len(dri_rules))
             with col_m2:
-                total_rules = business_rules['RULE_COUNT'].sum()
-                st.metric("Total rules", int(total_rules))
-            with col_m3:
-                persistent = len(business_rules[business_rules['DEFICIT_TYPE'] == 'PERSISTENT'])
+                persistent = len(dri_rules[dri_rules['DEFICIT_TYPE'] == 'PERSISTENT'])
                 st.metric("Persistent", persistent)
-            with col_m4:
-                fluctuating = len(business_rules[business_rules['DEFICIT_TYPE'] == 'FLUCTUATING'])
+            with col_m3:
+                fluctuating = len(dri_rules[dri_rules['DEFICIT_TYPE'] == 'FLUCTUATING'])
                 st.metric("Fluctuating", fluctuating)
+            with col_m4:
+                active_rules = len(dri_rules[dri_rules['IS_ACTIVE'] == True])
+                st.metric("Active", active_rules)
             
-            type_filter = st.selectbox("Filter by type", ["All", "PERSISTENT", "FLUCTUATING"], key="br_type_filter")
-            domain_filter = st.selectbox("Filter by domain", ["All"] + sorted(business_rules['DOMAIN'].unique().tolist()), key="br_domain_filter")
+            type_filter = st.selectbox("Filter by type", ["All", "PERSISTENT", "FLUCTUATING"], key="dri_type_filter")
+            domain_filter = st.selectbox("Filter by domain", ["All"] + sorted(dri_rules['DOMAIN'].unique().tolist()), key="dri_domain_filter")
             
-            filtered_rules = business_rules.copy()
+            filtered_rules = dri_rules.copy()
             if type_filter != "All":
                 filtered_rules = filtered_rules[filtered_rules['DEFICIT_TYPE'] == type_filter]
             if domain_filter != "All":
                 filtered_rules = filtered_rules[filtered_rules['DOMAIN'] == domain_filter]
             
             st.dataframe(
-                filtered_rules[['DRI_DEFICIT_ID', 'DEFICIT_NAME', 'DOMAIN', 'DEFICIT_TYPE', 'EXPIRY_DAYS', 'LOOKBACK_DAYS_HISTORIC', 'RULE_COUNT']],
+                filtered_rules[['DEFICIT_ID', 'DEFICIT_NAME', 'DOMAIN', 'DEFICIT_TYPE', 'EXPIRY_DAYS', 'RENEWAL_REMINDER_DAYS', 'LOOKBACK_DAYS_HISTORIC']],
                 use_container_width=True,
                 column_config={
-                    'DRI_DEFICIT_ID': st.column_config.TextColumn('ID', width='small'),
+                    'DEFICIT_ID': st.column_config.TextColumn('ID', width='small'),
                     'DEFICIT_NAME': st.column_config.TextColumn('Deficit Name', width='medium'),
                     'DOMAIN': st.column_config.TextColumn('Domain', width='medium'),
                     'DEFICIT_TYPE': st.column_config.TextColumn('Type', width='small'),
-                    'EXPIRY_DAYS': st.column_config.NumberColumn('Expiry Days', width='small'),
-                    'LOOKBACK_DAYS_HISTORIC': st.column_config.TextColumn('Lookback', width='small'),
-                    'RULE_COUNT': st.column_config.NumberColumn('Rules', width='small')
+                    'EXPIRY_DAYS': st.column_config.NumberColumn('Expiry (days)', width='small', help='0 = Never expires (persistent)'),
+                    'RENEWAL_REMINDER_DAYS': st.column_config.NumberColumn('Reminder (days)', width='small', help='Days before expiry to show in review queue'),
+                    'LOOKBACK_DAYS_HISTORIC': st.column_config.TextColumn('Lookback', width='small')
                 }
             )
             
             st.subheader("Rule details")
-            selected_deficit_br = st.selectbox(
+            selected_deficit = st.selectbox(
                 "Select deficit to view full rules",
-                filtered_rules['DRI_DEFICIT_ID'].tolist(),
-                format_func=lambda x: f"{x} - {filtered_rules[filtered_rules['DRI_DEFICIT_ID']==x]['DEFICIT_NAME'].iloc[0]}",
-                key="br_detail_select"
+                filtered_rules['DEFICIT_ID'].tolist(),
+                format_func=lambda x: f"{x} - {filtered_rules[filtered_rules['DEFICIT_ID']==x]['DEFICIT_NAME'].iloc[0]}",
+                key="dri_detail_select"
             )
             
-            if selected_deficit_br:
-                deficit_row = filtered_rules[filtered_rules['DRI_DEFICIT_ID'] == selected_deficit_br].iloc[0]
+            if selected_deficit:
+                deficit_row = filtered_rules[filtered_rules['DEFICIT_ID'] == selected_deficit].iloc[0]
                 
                 with st.container(border=True):
-                    st.markdown(f"### {deficit_row['DEFICIT_NAME']} ({deficit_row['DRI_DEFICIT_ID']})")
+                    st.markdown(f"### {deficit_row['DEFICIT_NAME']} ({deficit_row['DEFICIT_ID']})")
                     
-                    col_d1, col_d2, col_d3, col_d4 = st.columns(4)
-                    with col_d1:
-                        if deficit_row['DEFICIT_TYPE'] == 'PERSISTENT':
-                            st.badge("PERSISTENT", icon=":material/all_inclusive:", color="blue")
-                        else:
-                            st.badge("FLUCTUATING", icon=":material/timelapse:", color="orange")
-                    with col_d2:
-                        st.markdown(f"**Domain:** {deficit_row['DOMAIN']}")
-                    with col_d3:
-                        expiry = deficit_row['EXPIRY_DAYS']
-                        st.markdown(f"**Expiry:** {expiry if expiry > 0 else 'Never'} days")
-                    with col_d4:
-                        st.markdown(f"**Lookback:** {deficit_row['LOOKBACK_DAYS_HISTORIC']}")
+                    edit_mode = st.toggle("Edit mode", key=f"edit_mode_{selected_deficit}")
                     
-                    st.markdown("---")
-                    st.markdown(f"**Rules ({deficit_row['RULE_COUNT']} total):**")
-                    
-                    try:
-                        rules_json = deficit_row['RULES_JSON']
-                        if isinstance(rules_json, str):
-                            rules_json = json.loads(rules_json)
+                    if edit_mode:
+                        st.info("Edit the deficit settings below and click Save to update.", icon=":material/edit:")
                         
-                        for i, rule in enumerate(rules_json):
-                            with st.expander(f"Rule {rule.get('rule_number', i+1)}: {rule.get('rule_description', 'N/A')}", expanded=i==0):
-                                rule_cols = st.columns([1, 1, 1])
-                                with rule_cols[0]:
-                                    rule_type = rule.get('rule_type', 'unknown')
-                                    if rule_type == 'keyword_search':
-                                        st.badge("keyword_search", icon=":material/search:", color="green")
-                                    elif rule_type == 'specific_value':
-                                        st.badge("specific_value", icon=":material/check_box:", color="blue")
-                                    elif rule_type == 'aggregation':
-                                        st.badge("aggregation", icon=":material/functions:", color="purple")
-                                    else:
-                                        st.badge(rule_type, color="gray")
-                                with rule_cols[1]:
-                                    st.markdown(f"**Source:** `{rule.get('source_type', 'N/A')}`")
-                                with rule_cols[2]:
-                                    st.markdown(f"**Threshold:** {rule.get('threshold', 1)}")
+                        edit_col1, edit_col2 = st.columns(2)
+                        with edit_col1:
+                            edit_deficit_type = st.selectbox(
+                                "Deficit Type",
+                                ["PERSISTENT", "FLUCTUATING"],
+                                index=0 if deficit_row['DEFICIT_TYPE'] == 'PERSISTENT' else 1,
+                                key=f"edit_type_{selected_deficit}"
+                            )
+                            edit_domain = st.text_input(
+                                "Domain",
+                                value=deficit_row['DOMAIN'],
+                                key=f"edit_domain_{selected_deficit}"
+                            )
+                            edit_lookback = st.text_input(
+                                "Lookback (days or 'all')",
+                                value=str(deficit_row['LOOKBACK_DAYS_HISTORIC'] or 'all'),
+                                key=f"edit_lookback_{selected_deficit}"
+                            )
+                        with edit_col2:
+                            edit_expiry = st.number_input(
+                                "Expiry Days (0 = never)",
+                                value=int(deficit_row['EXPIRY_DAYS'] or 0),
+                                min_value=0,
+                                max_value=365,
+                                key=f"edit_expiry_{selected_deficit}"
+                            )
+                            edit_reminder = st.number_input(
+                                "Renewal Reminder Days",
+                                value=int(deficit_row['RENEWAL_REMINDER_DAYS'] or 7),
+                                min_value=1,
+                                max_value=30,
+                                key=f"edit_reminder_{selected_deficit}"
+                            )
+                            edit_active = st.checkbox(
+                                "Is Active",
+                                value=bool(deficit_row['IS_ACTIVE']),
+                                key=f"edit_active_{selected_deficit}"
+                            )
+                        
+                        st.markdown("---")
+                        st.markdown("**Detection Rules**")
+                        
+                        try:
+                            rules_json = deficit_row['RULES_JSON']
+                            if isinstance(rules_json, str):
+                                rules_json = json.loads(rules_json)
+                            
+                            edited_rules = []
+                            if rules_json:
+                                for i, rule in enumerate(rules_json):
+                                    with st.expander(f"Rule {rule.get('rule_number', i+1)}: {rule.get('rule_description', 'N/A')}", expanded=i==0):
+                                        rule_edit_col1, rule_edit_col2 = st.columns(2)
+                                        with rule_edit_col1:
+                                            rule_status = st.selectbox(
+                                                "Status",
+                                                ["active", "inactive"],
+                                                index=0 if rule.get('rule_status', 'active') == 'active' else 1,
+                                                key=f"rule_status_{selected_deficit}_{i}"
+                                            )
+                                            rule_type = st.selectbox(
+                                                "Rule Type",
+                                                ["keyword_search", "specific_value", "aggregation"],
+                                                index=["keyword_search", "specific_value", "aggregation"].index(rule.get('rule_type', 'keyword_search')),
+                                                key=f"rule_type_{selected_deficit}_{i}"
+                                            )
+                                            rule_source = st.selectbox(
+                                                "Source Table",
+                                                ["ACTIVE_RESIDENT_MEDICAL_PROFILE", "ACTIVE_RESIDENT_NOTES", "ACTIVE_RESIDENT_MEDICATION", 
+                                                 "ACTIVE_RESIDENT_OBSERVATIONS", "ACTIVE_RESIDENT_ASSESSMENT_FORMS", "ACTIVE_RESIDENT_OBSERVATION_GROUP"],
+                                                index=["ACTIVE_RESIDENT_MEDICAL_PROFILE", "ACTIVE_RESIDENT_NOTES", "ACTIVE_RESIDENT_MEDICATION", 
+                                                       "ACTIVE_RESIDENT_OBSERVATIONS", "ACTIVE_RESIDENT_ASSESSMENT_FORMS", "ACTIVE_RESIDENT_OBSERVATION_GROUP"].index(rule.get('source_type', 'ACTIVE_RESIDENT_NOTES')) if rule.get('source_type') in ["ACTIVE_RESIDENT_MEDICAL_PROFILE", "ACTIVE_RESIDENT_NOTES", "ACTIVE_RESIDENT_MEDICATION", "ACTIVE_RESIDENT_OBSERVATIONS", "ACTIVE_RESIDENT_ASSESSMENT_FORMS", "ACTIVE_RESIDENT_OBSERVATION_GROUP"] else 0,
+                                                key=f"rule_source_{selected_deficit}_{i}"
+                                            )
+                                        with rule_edit_col2:
+                                            rule_threshold = st.number_input(
+                                                "Threshold",
+                                                value=int(rule.get('threshold', 1)) if rule.get('threshold') and str(rule.get('threshold')).isdigit() else 1,
+                                                min_value=1,
+                                                key=f"rule_threshold_{selected_deficit}_{i}"
+                                            )
+                                            rule_desc = st.text_input(
+                                                "Description",
+                                                value=rule.get('rule_description', ''),
+                                                key=f"rule_desc_{selected_deficit}_{i}"
+                                            )
+                                            rule_search_field = st.text_input(
+                                                "Search Field",
+                                                value=str(rule.get('search_field', '')) if rule.get('search_field') and str(rule.get('search_field')) != 'nan' else '',
+                                                key=f"rule_search_{selected_deficit}_{i}"
+                                            )
+                                        
+                                        st.markdown("**Filters:**")
+                                        functions = rule.get('functions', [])
+                                        edited_functions = []
+                                        for j, func in enumerate(functions):
+                                            func_col1, func_col2, func_col3 = st.columns([1, 1, 2])
+                                            with func_col1:
+                                                func_type = st.selectbox(
+                                                    "Type",
+                                                    ["inclusion_filter", "exclusion_filter", "aggregation"],
+                                                    index=["inclusion_filter", "exclusion_filter", "aggregation"].index(func.get('function_type', 'inclusion_filter')),
+                                                    key=f"func_type_{selected_deficit}_{i}_{j}"
+                                                )
+                                            with func_col2:
+                                                func_key = st.text_input(
+                                                    "Key",
+                                                    value=func.get('key', ''),
+                                                    key=f"func_key_{selected_deficit}_{i}_{j}"
+                                                )
+                                            with func_col3:
+                                                func_value = st.text_input(
+                                                    "Value",
+                                                    value=func.get('value', ''),
+                                                    key=f"func_value_{selected_deficit}_{i}_{j}"
+                                                )
+                                            edited_functions.append({
+                                                "function_type": func_type,
+                                                "key": func_key,
+                                                "value": func_value
+                                            })
+                                        
+                                        edited_rules.append({
+                                            "rule_number": rule.get('rule_number', i+1),
+                                            "rule_status": rule_status,
+                                            "rule_type": rule_type,
+                                            "rule_description": rule_desc,
+                                            "source_type": rule_source,
+                                            "source_table_description": rule.get('source_table_description', ''),
+                                            "search_field": rule_search_field if rule_search_field else None,
+                                            "threshold": rule_threshold,
+                                            "functions": edited_functions
+                                        })
+                            
+                            st.session_state[f'edited_rules_{selected_deficit}'] = edited_rules
+                            
+                        except Exception as e:
+                            st.error(f"Error parsing rules for editing: {e}")
+                        
+                        st.markdown("---")
+                        if st.button("Save Deficit Changes", type="primary", key=f"save_deficit_{selected_deficit}", icon=":material/save:"):
+                            try:
+                                edited_rules_json = json.dumps(st.session_state.get(f'edited_rules_{selected_deficit}', []))
+                                escaped_rules = edited_rules_json.replace("'", "''")
                                 
-                                functions = rule.get('functions', [])
-                                if functions:
-                                    st.markdown("**Functions:**")
-                                    for func in functions:
-                                        func_type = func.get('function_type', '')
-                                        key = func.get('key', '')
-                                        value = func.get('value', '')
-                                        if func_type == 'inclusion_filter':
-                                            st.markdown(f"- ✅ Include: `{key}` = `{value}`")
-                                        elif func_type == 'exclusion_filter':
-                                            st.markdown(f"- ❌ Exclude: `{key}` = `{value}`")
-                                        elif func_type == 'aggregation':
-                                            st.markdown(f"- 📊 Aggregate: `{key}` → `{value}`")
-                                
-                                st.markdown("**Full rule JSON:**")
-                                st.json(rule)
-                    except Exception as e:
-                        st.error(f"Error parsing rules: {e}")
-                        st.json(deficit_row['RULES_JSON'])
-        else:
-            st.info("No business rules found in DRI_BUSINESS_RULES table. Loading from JSON template may be required.", icon=":material/info:")
+                                execute_query(f"""
+                                    UPDATE AGEDCARE.AGEDCARE.DRI_RULES 
+                                    SET 
+                                        DEFICIT_TYPE = '{edit_deficit_type}',
+                                        DOMAIN = '{edit_domain}',
+                                        EXPIRY_DAYS = {edit_expiry},
+                                        RENEWAL_REMINDER_DAYS = {edit_reminder},
+                                        LOOKBACK_DAYS_HISTORIC = '{edit_lookback}',
+                                        IS_ACTIVE = {edit_active},
+                                        RULES_JSON = PARSE_JSON('{escaped_rules}'),
+                                        MODIFIED_BY = CURRENT_USER(),
+                                        MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
+                                    WHERE DEFICIT_ID = '{selected_deficit}' AND IS_CURRENT_VERSION = TRUE
+                                """, session)
+                                st.success(f"Saved changes for {selected_deficit}", icon=":material/check_circle:")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to save: {e}", icon=":material/error:")
+                    
+                    else:
+                        col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+                        with col_d1:
+                            if deficit_row['DEFICIT_TYPE'] == 'PERSISTENT':
+                                st.badge("PERSISTENT", icon=":material/all_inclusive:", color="blue")
+                            else:
+                                st.badge("FLUCTUATING", icon=":material/timelapse:", color="orange")
+                        with col_d2:
+                            st.markdown(f"**Domain:** {deficit_row['DOMAIN']}")
+                        with col_d3:
+                            expiry = deficit_row['EXPIRY_DAYS']
+                            st.markdown(f"**Expiry:** {expiry if expiry > 0 else 'Never'}")
+                        with col_d4:
+                            st.markdown(f"**Reminder:** {deficit_row['RENEWAL_REMINDER_DAYS']} days")
+                        
+                        st.markdown("---")
+                        st.markdown(f"**Lookback period:** {deficit_row['LOOKBACK_DAYS_HISTORIC']}")
+                        st.markdown(f"**Active:** {'Yes' if deficit_row['IS_ACTIVE'] else 'No'}")
+                        
+                        st.markdown("---")
+                        st.markdown("**Detection Rules:**")
+                        
+                        try:
+                            rules_json = deficit_row['RULES_JSON']
+                            if isinstance(rules_json, str):
+                                rules_json = json.loads(rules_json)
+                            
+                            if rules_json:
+                                for i, rule in enumerate(rules_json):
+                                    rule_status = rule.get('rule_status', 'active')
+                                    status_icon = ":material/check_circle:" if rule_status == 'active' else ":material/cancel:"
+                                    
+                                    with st.expander(f"{status_icon} Rule {rule.get('rule_number', i+1)}: {rule.get('rule_description', 'N/A')}", expanded=i==0):
+                                        rule_cols = st.columns([1, 1, 1, 1])
+                                        with rule_cols[0]:
+                                            if rule_status == 'active':
+                                                st.badge("active", icon=":material/check:", color="green")
+                                            else:
+                                                st.badge("inactive", color="gray")
+                                        with rule_cols[1]:
+                                            rule_type = rule.get('rule_type', 'unknown')
+                                            if rule_type == 'keyword_search':
+                                                st.badge("keyword_search", icon=":material/search:", color="blue")
+                                            elif rule_type == 'specific_value':
+                                                st.badge("specific_value", icon=":material/check_box:", color="purple")
+                                            elif rule_type == 'aggregation':
+                                                st.badge("aggregation", icon=":material/functions:", color="orange")
+                                            else:
+                                                st.badge(rule_type, color="gray")
+                                        with rule_cols[2]:
+                                            st.markdown(f"**Source:** `{rule.get('source_type', 'N/A')}`")
+                                        with rule_cols[3]:
+                                            st.markdown(f"**Threshold:** {rule.get('threshold', 1)}")
+                                        
+                                        search_field = rule.get('search_field')
+                                        if search_field and str(search_field) != 'nan':
+                                            st.markdown(f"**Search field:** `{search_field}`")
+                                        
+                                        functions = rule.get('functions', [])
+                                        if functions:
+                                            st.markdown("**Filters:**")
+                                            for func in functions:
+                                                func_type = func.get('function_type', '')
+                                                key = func.get('key', '')
+                                                value = func.get('value', '')
+                                                if func_type == 'inclusion_filter':
+                                                    st.markdown(f"- ✅ Include: `{key}` = `{value}`")
+                                                elif func_type == 'exclusion_filter':
+                                                    st.markdown(f"- ❌ Exclude: `{key}` = `{value}`")
+                                                elif func_type == 'aggregation':
+                                                    st.markdown(f"- 📊 Aggregate: `{key}` → `{value}`")
+                            else:
+                                st.info("No detection rules configured for this deficit", icon=":material/info:")
+                        except Exception as e:
+                            st.error(f"Error parsing rules: {e}")
+                            st.json(deficit_row['RULES_JSON'])
             
-    with tab6:
+            st.markdown("---")
+            st.subheader("Version management")
+            
+            all_versions = execute_query_df("""
+                SELECT DISTINCT VERSION_NUMBER, VERSION_DESCRIPTION, IS_CURRENT_VERSION, 
+                       MIN(CREATED_TIMESTAMP) as CREATED_TIMESTAMP
+                FROM AGEDCARE.AGEDCARE.DRI_RULES
+                GROUP BY VERSION_NUMBER, VERSION_DESCRIPTION, IS_CURRENT_VERSION
+                ORDER BY CREATED_TIMESTAMP DESC
+            """, session)
+            
+            if all_versions is not None and len(all_versions) > 0:
+                st.dataframe(all_versions, use_container_width=True)
+            
+            with st.expander("Create new version", expanded=False):
+                new_version_number = st.text_input("New version number", value="v1.1", key="new_rule_version")
+                new_version_desc = st.text_input("Version description", value="Updated rules", key="new_rule_desc")
+                
+                if st.button("Save as new version", key="save_new_version", icon=":material/save:"):
+                    try:
+                        execute_query(f"""
+                            UPDATE AGEDCARE.AGEDCARE.DRI_RULES 
+                            SET IS_CURRENT_VERSION = FALSE 
+                            WHERE IS_CURRENT_VERSION = TRUE
+                        """, session)
+                        
+                        execute_query(f"""
+                            INSERT INTO AGEDCARE.AGEDCARE.DRI_RULES (
+                                VERSION_NUMBER, VERSION_DESCRIPTION, IS_CURRENT_VERSION,
+                                DEFICIT_NUMBER, DEFICIT_ID, DOMAIN, DEFICIT_NAME, DEFICIT_TYPE,
+                                EXPIRY_DAYS, LOOKBACK_DAYS_HISTORIC, LOOKBACK_DAYS_DELTA,
+                                RENEWAL_REMINDER_DAYS, KEYWORDS_TO_SEARCH, RULES_JSON,
+                                IS_ACTIVE, CREATED_BY
+                            )
+                            SELECT 
+                                '{new_version_number}', '{new_version_desc}', TRUE,
+                                DEFICIT_NUMBER, DEFICIT_ID, DOMAIN, DEFICIT_NAME, DEFICIT_TYPE,
+                                EXPIRY_DAYS, LOOKBACK_DAYS_HISTORIC, LOOKBACK_DAYS_DELTA,
+                                RENEWAL_REMINDER_DAYS, KEYWORDS_TO_SEARCH, RULES_JSON,
+                                IS_ACTIVE, CURRENT_USER()
+                            FROM AGEDCARE.AGEDCARE.DRI_RULES
+                            WHERE VERSION_NUMBER = (
+                                SELECT VERSION_NUMBER FROM AGEDCARE.AGEDCARE.DRI_RULES 
+                                WHERE IS_CURRENT_VERSION = FALSE 
+                                ORDER BY CREATED_TIMESTAMP DESC LIMIT 1
+                            )
+                        """, session)
+                        st.success(f"Created new version: {new_version_number}", icon=":material/check_circle:")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to create version: {e}", icon=":material/error:")
+        else:
+            st.info("No DRI rules found. Please load rules from the business rules template.", icon=":material/info:")
+            
+    with tab4:
         st.subheader("Processing settings")
         st.caption("All production settings for nightly batch processing are stored per-client in this table. The batch job reads this configuration directly.")
         
@@ -352,6 +524,20 @@ This tab controls what runs during **nightly batch processing**:
         prod_prompt_version = db_production_config[0]['PROD_PROMPT_VERSION'] if db_production_config and db_production_config[0]['PROD_PROMPT_VERSION'] else 'v1.0'
         batch_schedule = db_production_config[0]['BATCH_SCHEDULE'] if db_production_config and db_production_config[0]['BATCH_SCHEDULE'] else '0 0 * * *'
         db_threshold = db_production_config[0]['CONTEXT_THRESHOLD'] if db_production_config and db_production_config[0]['CONTEXT_THRESHOLD'] else 6000
+        
+        with st.container(border=True):
+            st.markdown("**Current Production Settings Summary**")
+            summary_cols = st.columns(5)
+            with summary_cols[0]:
+                st.markdown(f"**DRI Rules:** v1.0")
+            with summary_cols[1]:
+                st.markdown(f"**Prompt:** {prod_prompt_version}")
+            with summary_cols[2]:
+                st.markdown(f"**Model:** {prod_model}")
+            with summary_cols[3]:
+                st.markdown(f"**Schedule:** {batch_schedule}")
+            with summary_cols[4]:
+                st.markdown(f"**Token Threshold:** {db_threshold:,}")
         
         st.subheader("Production model")
         st.caption(f"Current production model: **{prod_model}**")
@@ -379,30 +565,9 @@ This tab controls what runs during **nightly batch processing**:
             help="This model will be used by the nightly batch process"
         )
         
-        if st.button("Save model for production", key="save_model_prod", icon=":material/save:"):
-            try:
-                execute_query(f"""
-                    UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
-                    SET CONFIG_JSON = OBJECT_INSERT(
-                        CONFIG_JSON, 
-                        'production_settings', 
-                        OBJECT_INSERT(
-                            COALESCE(CONFIG_JSON:production_settings, OBJECT_CONSTRUCT()),
-                            'model', '{selected_prod_model}', TRUE
-                        ),
-                        TRUE
-                    ),
-                    MODIFIED_BY = CURRENT_USER(),
-                    MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
-                    WHERE CONFIG_ID = '{selected_config_id}'
-                """, session)
-                st.success(f"Production model saved: **{selected_prod_model}**", icon=":material/check_circle:")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to save: {e}", icon=":material/error:")
+
         
         st.subheader("Production prompt")
-        st.caption(f"Current prompt version: **{prod_prompt_version}**")
         
         prompt_versions = execute_query_df("""
             SELECT VERSION_NUMBER, DESCRIPTION, PROMPT_TEXT, IS_ACTIVE, CREATED_TIMESTAMP
@@ -414,61 +579,25 @@ This tab controls what runs during **nightly batch processing**:
             version_list = prompt_versions['VERSION_NUMBER'].tolist()
             default_prompt_idx = version_list.index(prod_prompt_version) if prod_prompt_version in version_list else 0
             
-            selected_version_for_copy = st.selectbox(
-                "Copy prompt from version (template)",
+            selected_prompt_version = st.selectbox(
+                "Prompt version",
                 version_list,
                 index=default_prompt_idx,
-                help="Select a prompt version template to copy, then customize below"
+                help="Select the prompt version to use for production"
             )
             
-            selected_prompt_info = prompt_versions[prompt_versions['VERSION_NUMBER'] == selected_version_for_copy].iloc[0]
-            st.caption(f"Template: {selected_prompt_info['DESCRIPTION']} | Created: {selected_prompt_info['CREATED_TIMESTAMP']}")
+            selected_prompt_info = prompt_versions[prompt_versions['VERSION_NUMBER'] == selected_prompt_version].iloc[0]
+            st.caption(f"{selected_prompt_info['DESCRIPTION']} | Created: {selected_prompt_info['CREATED_TIMESTAMP']}")
             
-            template_prompt_text = selected_prompt_info['PROMPT_TEXT']
+            prompt_text_display = selected_prompt_info['PROMPT_TEXT']
             
-            if st.button("Load template", key="load_template", icon=":material/content_copy:"):
-                st.session_state['editing_prompt_text'] = template_prompt_text
-                st.rerun()
-        
-        default_prompt_display = st.session_state.get('editing_prompt_text', prod_prompt_text or template_prompt_text if 'template_prompt_text' in dir() else '')
-        
-        st.markdown("**Production prompt text** (stored directly in client config):")
-        edited_prompt_text = st.text_area(
-            "Prompt text",
-            value=default_prompt_display,
-            height=300,
-            help="This exact prompt text will be used for nightly batch processing for this client"
-        )
-        
-        new_version_label = st.text_input("Version label", value=prod_prompt_version, help="Label for this prompt version (e.g., v1.1, v2.0)")
-        
-        if st.button("Save prompt for production", key="save_prompt_prod", icon=":material/save:"):
-            try:
-                escaped_prompt = edited_prompt_text.replace("'", "''").replace("\\", "\\\\")
-                execute_query(f"""
-                    UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
-                    SET CONFIG_JSON = OBJECT_INSERT(
-                        CONFIG_JSON, 
-                        'production_settings', 
-                        OBJECT_INSERT(
-                            OBJECT_INSERT(
-                                COALESCE(CONFIG_JSON:production_settings, OBJECT_CONSTRUCT()),
-                                'prompt_text', '{escaped_prompt}', TRUE
-                            ),
-                            'prompt_version', '{new_version_label}', TRUE
-                        ),
-                        TRUE
-                    ),
-                    MODIFIED_BY = CURRENT_USER(),
-                    MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
-                    WHERE CONFIG_ID = '{selected_config_id}'
-                """, session)
-                st.success(f"Production prompt saved for **{selected_client_display}** as version **{new_version_label}**", icon=":material/check_circle:")
-                if 'editing_prompt_text' in st.session_state:
-                    del st.session_state['editing_prompt_text']
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to save: {e}", icon=":material/error:")
+            st.text_area(
+                "Prompt text (read-only)",
+                value=prompt_text_display,
+                height=300,
+                disabled=True,
+                help="This prompt text will be used for nightly batch processing"
+            )
         
         st.subheader("Batch schedule")
         st.caption(f"Current schedule: **{batch_schedule}** (cron format)")
@@ -496,27 +625,7 @@ This tab controls what runs during **nightly batch processing**:
         
         st.info("**Delta processing:** The nightly batch only processes records that have changed since the last successful run.", icon=":material/info:")
         
-        if st.button("Save schedule for production", key="save_schedule_prod", icon=":material/save:"):
-            try:
-                execute_query(f"""
-                    UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
-                    SET CONFIG_JSON = OBJECT_INSERT(
-                        CONFIG_JSON, 
-                        'production_settings', 
-                        OBJECT_INSERT(
-                            COALESCE(CONFIG_JSON:production_settings, OBJECT_CONSTRUCT()),
-                            'batch_schedule', '{selected_schedule}', TRUE
-                        ),
-                        TRUE
-                    ),
-                    MODIFIED_BY = CURRENT_USER(),
-                    MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
-                    WHERE CONFIG_ID = '{selected_config_id}'
-                """, session)
-                st.success(f"Batch schedule saved: **{selected_schedule_name}** ({selected_schedule})", icon=":material/check_circle:")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to save: {e}", icon=":material/error:")
+
         
         st.subheader("Adaptive token sizing")
         st.caption("The LLM analysis uses adaptive token sizing to optimize performance during batch processing. A pre-query measures each resident's context size (notes, meds, observations, forms) before calling the LLM.")
@@ -550,33 +659,38 @@ This tab controls what runs during **nightly batch processing**:
         st.subheader("Trade-offs")
         st.warning("**Lower threshold** = More residents use large mode = Slower batch, but fewer truncation failures. **Higher threshold** = More residents use standard mode = Faster batch, but risk truncation for data-heavy residents.", icon=":material/warning:")
         
-        col_btn1, col_btn2, col_spacer = st.columns([1, 1, 2])
-        with col_btn1:
-            if st.button("Save for testing", icon=":material/science:", use_container_width=True):
-                st.session_state['context_threshold'] = new_threshold
-                st.success(f"Session threshold set to {new_threshold:,} characters", icon=":material/check_circle:")
-                st.caption("This value will be used for interactive testing in this session.")
-        
-        with col_btn2:
-            if st.button("Save for production", type="primary", key="save_threshold_prod", icon=":material/save:", use_container_width=True):
-                try:
-                    execute_query(f"""
-                        UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
-                        SET CONFIG_JSON = OBJECT_INSERT(
+        st.markdown("---")
+        if st.button("Save for production", type="primary", key="save_all_prod", icon=":material/save:", use_container_width=True):
+            try:
+                escaped_prompt = prompt_text_display.replace("'", "''").replace("\\", "\\\\") if 'prompt_text_display' in dir() else ''
+                prompt_ver = selected_prompt_version if 'selected_prompt_version' in dir() else prod_prompt_version
+                execute_query(f"""
+                    UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
+                    SET CONFIG_JSON = OBJECT_INSERT(
+                        OBJECT_INSERT(
                             CONFIG_JSON, 
-                            'client_settings', 
-                            OBJECT_INSERT(CONFIG_JSON:client_settings, 'context_threshold', {new_threshold}, TRUE),
+                            'production_settings', 
+                            OBJECT_CONSTRUCT(
+                                'model', '{selected_prod_model}',
+                                'prompt_text', '{escaped_prompt}',
+                                'prompt_version', '{prompt_ver}',
+                                'batch_schedule', '{selected_schedule}'
+                            ),
                             TRUE
                         ),
-                        MODIFIED_BY = CURRENT_USER(),
-                        MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
-                        WHERE CONFIG_ID = '{selected_config_id}'
-                    """, session)
-                    st.session_state['context_threshold'] = new_threshold
-                    st.success(f"Production threshold saved: {new_threshold:,} characters", icon=":material/check_circle:")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to save: {e}", icon=":material/error:")
+                        'client_settings', 
+                        OBJECT_INSERT(COALESCE(CONFIG_JSON:client_settings, OBJECT_CONSTRUCT()), 'context_threshold', {new_threshold}, TRUE),
+                        TRUE
+                    ),
+                    MODIFIED_BY = CURRENT_USER(),
+                    MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
+                    WHERE CONFIG_ID = '{selected_config_id}'
+                """, session)
+                st.session_state['context_threshold'] = new_threshold
+                st.success(f"All production settings saved successfully!", icon=":material/check_circle:")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to save: {e}", icon=":material/error:")
 
 else:
     st.error("Failed to connect to Snowflake", icon=":material/error:")

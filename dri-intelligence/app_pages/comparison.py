@@ -268,23 +268,27 @@ if session:
                 resident_context = context_result[0]['CONTEXT'] if context_result else ""
                 
                 keyword_df = execute_query_df("""
-                    SELECT DRI_DEFICIT_ID, DEFICIT_NAME, TO_VARCHAR(KEYWORDS) as KEYWORDS
+                    SELECT DRI_DEFICIT_ID, DEFICIT_NAME, KEYWORDS
                     FROM AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST
                     ORDER BY DRI_DEFICIT_ID
                 """, session)
                 
-                # Both Claude and Regex systems now use the same D001-D033 identifiers
-                # No mapping needed anymore since both systems are aligned
-                
-                regex_start = time.time()
-                regex_results = run_regex_detection(resident_context, keyword_df)
-                regex_time = int((time.time() - regex_start) * 1000)
-                regex_detected_ids = {k for k, v in regex_results.items() if v['detected']}
+                if keyword_df is None or len(keyword_df) == 0:
+                    st.warning("Keyword master list not available. Regex comparison will be skipped. Only Claude analysis will run.", icon=":material/warning:")
+                    regex_results = {}
+                    regex_detected_ids = set()
+                    regex_time = 0
+                else:
+                    regex_start = time.time()
+                    regex_results = run_regex_detection(resident_context, keyword_df)
+                    regex_time = int((time.time() - regex_start) * 1000)
+                    regex_detected_ids = {k for k, v in regex_results.items() if v['detected']}
                 
                 analysis_query = f"""
-                WITH rag_indicators AS (
-                    SELECT LISTAGG(INDICATOR_ID || ' - ' || INDICATOR_NAME || ': ' || DEFINITION, ' || ') WITHIN GROUP (ORDER BY INDICATOR_ID) as indicators_text
-                    FROM AGEDCARE.AGEDCARE.DRI_RAG_INDICATORS
+                WITH dri_rules AS (
+                    SELECT LISTAGG(DEFICIT_ID || ' - ' || DEFICIT_NAME || ': ' || COALESCE(DEFINITION, ARRAY_TO_STRING(KEYWORDS, ', ')), ' || ') WITHIN GROUP (ORDER BY DEFICIT_ID) as indicators_text
+                    FROM AGEDCARE.AGEDCARE.DRI_RULES
+                    WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
                 ),
                 prompt_template AS (
                     SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'
@@ -298,7 +302,7 @@ if session:
                                 'content': REPLACE(REPLACE(
                                     (SELECT PROMPT_TEXT FROM prompt_template),
                                     '{{resident_context}}', '{resident_context.replace("'", "''")[:50000]}'
-                                ), '{{rag_indicator_context}}', (SELECT indicators_text FROM rag_indicators))
+                                ), '{{rag_indicator_context}}', (SELECT indicators_text FROM dri_rules))
                             }}
                         ],
                         {{
@@ -517,7 +521,7 @@ if session:
     with col_f2:
         with st.container(border=True):
             indicator_count = execute_query_df("""
-                SELECT COUNT(*) as COUNT FROM AGEDCARE.AGEDCARE.DRI_RAG_INDICATORS
+                SELECT COUNT(*) as COUNT FROM AGEDCARE.AGEDCARE.DRI_RULES WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
             """, session)
             
             if indicator_count is not None and len(indicator_count) > 0:

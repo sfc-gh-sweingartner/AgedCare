@@ -172,16 +172,17 @@ if session:
                         SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as obs_text
                         FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {resident_id} ORDER BY EVENT_DATE DESC LIMIT 30)
                     ),
-                    rag_indicators AS (
-                        SELECT LISTAGG(INDICATOR_ID || ' - ' || INDICATOR_NAME || ': ' || DEFINITION, ' || ') WITHIN GROUP (ORDER BY INDICATOR_ID) as indicators_text
-                        FROM AGEDCARE.AGEDCARE.DRI_RAG_INDICATORS
+                    dri_rules AS (
+                        SELECT LISTAGG(DEFICIT_ID || ' - ' || DEFICIT_NAME || ' [' || DEFICIT_TYPE || ', Expiry: ' || EXPIRY_DAYS || 'd]: ' || COALESCE(DEFINITION, KEYWORDS_TO_SEARCH), ' || ') WITHIN GROUP (ORDER BY DEFICIT_ID) as indicators_text
+                        FROM AGEDCARE.AGEDCARE.DRI_RULES
+                        WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
                     ),
                     full_context AS (
                         SELECT 
                             'PROGRESS NOTES: ' || (SELECT notes_text FROM resident_notes) ||
                             ' MEDICATIONS: ' || (SELECT meds_text FROM resident_meds) ||
                             ' OBSERVATIONS: ' || (SELECT obs_text FROM resident_obs) ||
-                            ' DRI INDICATORS: ' || (SELECT indicators_text FROM rag_indicators) as context
+                            ' DRI INDICATORS: ' || (SELECT indicators_text FROM dri_rules) as context
                     )
                     SELECT 
                         SNOWFLAKE.CORTEX.COMPLETE(
