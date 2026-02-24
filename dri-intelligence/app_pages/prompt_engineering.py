@@ -232,11 +232,19 @@ if session:
             label_visibility="collapsed"
         )
         
-        col_v1, col_v2 = st.columns(2)
-        with col_v1:
-            new_version = st.text_input("New version", value="v1.1")
-        with col_v2:
-            new_description = st.text_input("Description", value="Updated prompt")
+        max_version = execute_query("""
+            SELECT MAX(VERSION_NUMBER) as MAX_VER FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS 
+            WHERE VERSION_NUMBER LIKE 'v%'
+        """, session)
+        if max_version and max_version[0]['MAX_VER']:
+            current_max = max_version[0]['MAX_VER']
+            next_num = int(current_max[1:]) + 1
+            next_version = f"v{next_num:04d}"
+        else:
+            next_version = "v0001"
+        
+        st.info(f"Next version will be: **{next_version}**", icon=":material/info:")
+        new_description = st.text_input("Description", value="Updated prompt")
         
         if st.button("💾 Save as new version"):
             escaped_prompt = edited_prompt.replace("'", "''")
@@ -244,9 +252,9 @@ if session:
                 execute_query(f"""
                     INSERT INTO AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS 
                     (VERSION_NUMBER, PROMPT_TEXT, DESCRIPTION, CREATED_BY, IS_ACTIVE)
-                    VALUES ('{new_version}', '{escaped_prompt}', '{new_description}', 'user', FALSE)
+                    VALUES ('{next_version}', '{escaped_prompt}', '{new_description}', 'user', FALSE)
                 """, session)
-                st.success(f"Saved as version {new_version}")
+                st.success(f"Saved as version {next_version}")
                 st.cache_data.clear()
             except Exception as e:
                 st.error(f"Failed to save: {e}")

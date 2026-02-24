@@ -27,6 +27,18 @@ This tab controls what runs during **nightly batch processing**:
 - **Batch Schedule**: When the nightly job runs (cron format)
 - **Adaptive Token Sizing**: Threshold for standard vs large token mode
 
+### Adaptive Token Sizing
+The LLM analysis uses adaptive token sizing to optimize performance during batch processing. A pre-query measures each resident's context size (notes, meds, observations, forms) before calling the LLM.
+
+| Mode | Threshold | max_tokens | Speed | Use case |
+|------|-----------|------------|-------|----------|
+| **Standard** | Below threshold | 4,096 | Fast | Residents with few notes |
+| **Large** | Above threshold | 16,384 | Slower | Prevents truncation for complex cases |
+
+**Trade-offs:**
+- **Lower threshold** = More residents use large mode = Slower batch, but fewer truncation failures
+- **Higher threshold** = More residents use standard mode = Faster batch, but risk truncation for data-heavy residents
+
 ### Workflow
 1. Test prompts in the **Prompt Engineering** page
 2. Once satisfied, come here to **Processing Settings**
@@ -37,8 +49,6 @@ This tab controls what runs during **nightly batch processing**:
 ### Tips
 - Always test thoroughly in Prompt Engineering before saving to production
 - Use **Claude vs Regex** comparison to validate accuracy improvements
-- The context threshold affects processing speed vs completeness tradeoff
-- Lower threshold = more residents use large mode (slower but complete)
         """)
 
     clients = execute_query_df("""
@@ -148,7 +158,7 @@ This tab controls what runs during **nightly batch processing**:
         dri_rules = execute_query_df("""
             SELECT DEFICIT_NUMBER, DEFICIT_ID, DEFICIT_NAME, DOMAIN, DEFICIT_TYPE, 
                    EXPIRY_DAYS, RENEWAL_REMINDER_DAYS, LOOKBACK_DAYS_HISTORIC,
-                   KEYWORDS_TO_SEARCH, RULES_JSON, IS_ACTIVE
+                   KEYWORDS_TO_SEARCH, RULES_JSON, IS_ACTIVE, VERSION_NUMBER
             FROM AGEDCARE.AGEDCARE.DRI_RULES
             WHERE IS_CURRENT_VERSION = TRUE
             ORDER BY DEFICIT_NUMBER
@@ -453,19 +463,16 @@ This tab controls what runs during **nightly batch processing**:
             st.markdown("---")
             st.subheader("Version management")
             
-            all_versions = execute_query_df("""
-                SELECT DISTINCT VERSION_NUMBER, VERSION_DESCRIPTION, IS_CURRENT_VERSION, 
-                       MIN(CREATED_TIMESTAMP) as CREATED_TIMESTAMP
-                FROM AGEDCARE.AGEDCARE.DRI_RULES
-                GROUP BY VERSION_NUMBER, VERSION_DESCRIPTION, IS_CURRENT_VERSION
-                ORDER BY CREATED_TIMESTAMP DESC
-            """, session)
-            
-            if all_versions is not None and len(all_versions) > 0:
-                st.dataframe(all_versions, use_container_width=True)
-            
-            with st.expander("Create new version", expanded=False):
-                new_version_number = st.text_input("New version number", value="v1.1", key="new_rule_version")
+            with st.expander("Create new version of this deficit", expanded=False):
+                current_version = deficit_row['VERSION_NUMBER']
+                if current_version and '-' in current_version:
+                    prefix = current_version.split('-')[0]
+                    current_num = int(current_version.split('-')[1])
+                    next_version = f"{prefix}-{current_num + 1:04d}"
+                else:
+                    next_version = f"{selected_deficit}-0001"
+                
+                st.info(f"Current version: **{current_version}** → New version: **{next_version}**", icon=":material/info:")
                 new_version_desc = st.text_input("Version description", value="Updated rules", key="new_rule_desc")
                 
                 if st.button("Save as new version", key="save_new_version", icon=":material/save:"):
@@ -473,7 +480,7 @@ This tab controls what runs during **nightly batch processing**:
                         execute_query(f"""
                             UPDATE AGEDCARE.AGEDCARE.DRI_RULES 
                             SET IS_CURRENT_VERSION = FALSE 
-                            WHERE IS_CURRENT_VERSION = TRUE
+                            WHERE DEFICIT_ID = '{selected_deficit}' AND IS_CURRENT_VERSION = TRUE
                         """, session)
                         
                         execute_query(f"""
@@ -485,22 +492,29 @@ This tab controls what runs during **nightly batch processing**:
                                 IS_ACTIVE, CREATED_BY
                             )
                             SELECT 
-                                '{new_version_number}', '{new_version_desc}', TRUE,
+                                '{next_version}', '{new_version_desc}', TRUE,
                                 DEFICIT_NUMBER, DEFICIT_ID, DOMAIN, DEFICIT_NAME, DEFICIT_TYPE,
                                 EXPIRY_DAYS, LOOKBACK_DAYS_HISTORIC, LOOKBACK_DAYS_DELTA,
                                 RENEWAL_REMINDER_DAYS, KEYWORDS_TO_SEARCH, RULES_JSON,
                                 IS_ACTIVE, CURRENT_USER()
                             FROM AGEDCARE.AGEDCARE.DRI_RULES
-                            WHERE VERSION_NUMBER = (
-                                SELECT VERSION_NUMBER FROM AGEDCARE.AGEDCARE.DRI_RULES 
-                                WHERE IS_CURRENT_VERSION = FALSE 
-                                ORDER BY CREATED_TIMESTAMP DESC LIMIT 1
-                            )
+                            WHERE DEFICIT_ID = '{selected_deficit}' AND VERSION_NUMBER = '{current_version}'
                         """, session)
-                        st.success(f"Created new version: {new_version_number}", icon=":material/check_circle:")
+                        st.success(f"Created new version: {next_version}", icon=":material/check_circle:")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to create version: {e}", icon=":material/error:")
+            
+            all_versions = execute_query_df(f"""
+                SELECT VERSION_NUMBER, VERSION_DESCRIPTION, IS_CURRENT_VERSION, CREATED_TIMESTAMP
+                FROM AGEDCARE.AGEDCARE.DRI_RULES
+                WHERE DEFICIT_ID = '{selected_deficit}'
+                ORDER BY CREATED_TIMESTAMP DESC
+            """, session)
+            
+            if all_versions is not None and len(all_versions) > 0:
+                st.caption("Version history for this deficit:")
+                st.dataframe(all_versions, use_container_width=True)
         else:
             st.info("No DRI rules found. Please load rules from the business rules template.", icon=":material/info:")
             
@@ -521,22 +535,20 @@ This tab controls what runs during **nightly batch processing**:
         
         prod_model = db_production_config[0]['PROD_MODEL'] if db_production_config and db_production_config[0]['PROD_MODEL'] else 'claude-3-5-sonnet'
         prod_prompt_text = db_production_config[0]['PROD_PROMPT_TEXT'] if db_production_config and db_production_config[0]['PROD_PROMPT_TEXT'] else None
-        prod_prompt_version = db_production_config[0]['PROD_PROMPT_VERSION'] if db_production_config and db_production_config[0]['PROD_PROMPT_VERSION'] else 'v1.0'
+        prod_prompt_version = db_production_config[0]['PROD_PROMPT_VERSION'] if db_production_config and db_production_config[0]['PROD_PROMPT_VERSION'] else 'v0001'
         batch_schedule = db_production_config[0]['BATCH_SCHEDULE'] if db_production_config and db_production_config[0]['BATCH_SCHEDULE'] else '0 0 * * *'
         db_threshold = db_production_config[0]['CONTEXT_THRESHOLD'] if db_production_config and db_production_config[0]['CONTEXT_THRESHOLD'] else 6000
         
         with st.container(border=True):
             st.markdown("**Current Production Settings Summary**")
-            summary_cols = st.columns(5)
+            summary_cols = st.columns(4)
             with summary_cols[0]:
-                st.markdown(f"**DRI Rules:** v1.0")
-            with summary_cols[1]:
                 st.markdown(f"**Prompt:** {prod_prompt_version}")
-            with summary_cols[2]:
+            with summary_cols[1]:
                 st.markdown(f"**Model:** {prod_model}")
-            with summary_cols[3]:
+            with summary_cols[2]:
                 st.markdown(f"**Schedule:** {batch_schedule}")
-            with summary_cols[4]:
+            with summary_cols[3]:
                 st.markdown(f"**Token Threshold:** {db_threshold:,}")
         
         st.subheader("Production model")
@@ -625,13 +637,27 @@ This tab controls what runs during **nightly batch processing**:
         
         st.info("**Delta processing:** The nightly batch only processes records that have changed since the last successful run.", icon=":material/info:")
         
-
+        st.subheader("DRI rules per deficit")
+        st.caption("Select which rule version to use for each deficit during batch processing.")
+        
+        deficit_versions = execute_query_df("""
+            SELECT DEFICIT_ID, DEFICIT_NAME, VERSION_NUMBER, IS_CURRENT_VERSION
+            FROM AGEDCARE.AGEDCARE.DRI_RULES
+            ORDER BY DEFICIT_ID, CREATED_TIMESTAMP DESC
+        """, session)
+        
+        if deficit_versions is not None and len(deficit_versions) > 0:
+            try:
+                current_deficits = deficit_versions[deficit_versions['IS_CURRENT_VERSION'] == True][['DEFICIT_ID', 'DEFICIT_NAME', 'VERSION_NUMBER']].copy()
+                current_deficits.columns = ['Deficit ID', 'Deficit Name', 'Current Version']
+                st.dataframe(current_deficits, use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.error(f"Error displaying deficit versions: {e}")
         
         st.subheader("Adaptive token sizing")
-        st.caption("The LLM analysis uses adaptive token sizing to optimize performance during batch processing. A pre-query measures each resident's context size (notes, meds, observations, forms) before calling the LLM.")
+        st.caption("Threshold for standard vs large token mode. See 'How to use this page' for details.")
         
         current_threshold = st.session_state.get('context_threshold', db_threshold)
-        st.caption(f"Production value: **{db_threshold:,}** | Session value: **{current_threshold:,}**")
         
         new_threshold = st.number_input(
             "Context threshold (characters)",
@@ -641,23 +667,6 @@ This tab controls what runs during **nightly batch processing**:
             step=500,
             help="Residents with context below this threshold use standard mode (faster). Above uses large mode (slower but complete)."
         )
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            with st.container(border=True):
-                st.markdown("**Standard mode** (below threshold)")
-                st.markdown("- `max_tokens`: 4,096")
-                st.markdown("- Fast processing")
-                st.markdown("- Ideal for residents with few notes")
-        with col2:
-            with st.container(border=True):
-                st.markdown("**Large mode** (above threshold)")
-                st.markdown("- `max_tokens`: 16,384")
-                st.markdown("- Slower processing")
-                st.markdown("- Prevents truncation for complex cases")
-        
-        st.subheader("Trade-offs")
-        st.warning("**Lower threshold** = More residents use large mode = Slower batch, but fewer truncation failures. **Higher threshold** = More residents use standard mode = Faster batch, but risk truncation for data-heavy residents.", icon=":material/warning:")
         
         st.markdown("---")
         if st.button("Save for production", type="primary", key="save_all_prod", icon=":material/save:", use_container_width=True):
