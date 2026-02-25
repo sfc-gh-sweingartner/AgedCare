@@ -292,7 +292,7 @@ Return ONLY valid JSON array, no other text."""
         
         dri_rules = execute_query("""
             SELECT DEFICIT_ID, DEFICIT_NAME, DEFINITION, DEFICIT_TYPE, 
-                   EXPIRY_DAYS, KEYWORDS
+                   EXPIRY_DAYS, KEYWORDS_TO_SEARCH
             FROM AGEDCARE.AGEDCARE.DRI_RULES
             WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
             ORDER BY DEFICIT_ID
@@ -302,7 +302,7 @@ Return ONLY valid JSON array, no other text."""
         if dri_rules:
             rag_parts = []
             for ind in dri_rules:
-                keywords_str = ', '.join(ind['KEYWORDS']) if ind['KEYWORDS'] else 'N/A'
+                keywords_str = ind['KEYWORDS_TO_SEARCH'] if ind['KEYWORDS_TO_SEARCH'] else 'N/A'
                 rag_parts.append(f"""
 {ind['DEFICIT_ID']} - {ind['DEFICIT_NAME']}
   Type: {ind['DEFICIT_TYPE']}
