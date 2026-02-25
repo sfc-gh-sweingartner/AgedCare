@@ -322,8 +322,9 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS (
 -- Prompt Version Auto-Increment: When saving a new prompt version, the system
 -- automatically assigns the next version number (e.g., v0007 → v0008)
 
--- DRI_RULES (Unified Rules Table - v2.0)
+-- DRI_RULES (Unified Rules Table - v2.3)
 -- Single source of truth for all 33 deficit detection rules with per-deficit versioning
+-- v2.3: Added LLM-optimized detection mode columns
 CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_RULES (
     RULE_ID VARCHAR(36) DEFAULT UUID_STRING(),
     
@@ -347,10 +348,17 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_RULES (
     -- Renewal settings (configurable per indicator)
     RENEWAL_REMINDER_DAYS INTEGER DEFAULT 7,  -- Days before expiry to prompt renewal
     
-    -- Detection configuration (structured columns for easy editing)
+    -- LLM-Optimized Detection Settings (v2.3)
+    DETECTION_MODE VARCHAR(50) DEFAULT 'clinical_reasoning',  -- clinical_reasoning, structured_data, threshold_aggregation, keyword_guidance
+    CLINICAL_GUIDANCE TEXT,  -- Instructions for LLM on how to identify this condition
+    INCLUSION_TERMS TEXT,  -- Keywords/phrases that suggest the condition (hints, not constraints)
+    EXCLUSION_PATTERNS TEXT,  -- Phrases that negate findings (e.g., "no diabetes", "family history")
+    REGULATORY_REFERENCE VARCHAR(500),  -- Source standards (ACQSC, AN-ACC) for compliance tracking
+    
+    -- Legacy detection configuration (for backward compatibility)
     DATA_SOURCES TEXT,  -- Where to look for evidence
-    KEYWORDS_TO_SEARCH TEXT,  -- Comma-separated keywords (for display only, LLM uses prompts)
-    EXCLUSION_KEYWORDS TEXT,  -- Keywords that should NOT trigger this indicator
+    KEYWORDS_TO_SEARCH TEXT,  -- Comma-separated keywords (legacy, replaced by INCLUSION_TERMS)
+    EXCLUSION_KEYWORDS TEXT,  -- Keywords that should NOT trigger (legacy, replaced by EXCLUSION_PATTERNS)
     
     -- Rule logic (human-readable from requirements)
     INITIAL_LOAD_RULE TEXT,  -- Full rule description for initial load
@@ -373,7 +381,8 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_RULES (
 );
 
 COMMENT ON TABLE AGEDCARE.AGEDCARE.DRI_RULES IS 
-'Unified rules table for all 33 DRI deficits with per-deficit versioning. 
+'Unified rules table for all 33 DRI deficits with per-deficit versioning and LLM-optimized detection. 
+Detection modes: clinical_reasoning (default), structured_data, threshold_aggregation, keyword_guidance.
 Format: D001-0001, D001-0002, etc. Replaces DRI_RAG_INDICATORS and DRI_BUSINESS_RULES.';
 
 -- DRI_CLINICAL_DECISIONS (v2.0)
@@ -1825,7 +1834,7 @@ The warehouse `MYWH` is used ONLY for:
 
 ---
 
-*Document Version: 2.2*  
+*Document Version: 2.3*  
 *Created: 2026-01-28*  
 *Updated: 2026-02-24*  
 *Status: Approved*
@@ -1845,4 +1854,5 @@ The warehouse `MYWH` is used ONLY for:
 | 1.9 | 2026-02-22 | **Business Rules Integration**: Added DRI_BUSINESS_RULES table for complete 33-deficit rule specifications (rule types, functions, temporal logic, thresholds). Added DRI_RULE_STATE table for tracking per-resident rule state with expiry logic. Updated configuration.py tab 5 to display full business rules. Added Outstanding Requirements indicator in UI. |
 | 2.0 | 2026-02-22 | **Feedback Loop Page**: Renamed analysis_results.py to audit_results.py. Added feedback_loop.py with rejection analysis, reason theme clustering via Cortex AI, and AI prompt improvement suggestions. Added V_INDICATOR_REJECTION_RATES view. |
 | 2.1 | 2026-02-24 | **Unified DRI_RULES Table**: Replaced DRI_RAG_INDICATORS, DRI_RAG_DECISIONS, DRI_BUSINESS_RULES, DRI_RULE_STATE with unified DRI_RULES table. Added DRI_CLINICAL_DECISIONS for nurse overrides. Implemented per-deficit versioning (D001-0001 format). Changed prompt versions to auto-increment (v0001 format). Updated Processing Settings tab: read-only prompt display, single Save button, deficit versions table. |
-| 2.2 | 2026-02-24 | **Enhanced Feedback Loop**: Added Section 5.4 with full Feedback Loop page specification. Features: time period filter (7/30/90 days), RAG indicator context filled for AI analysis, increased limits (500 base, 200 detailed, 150 for AI), full indicator context in rejections (ID, name, LLM reasoning, confidence). AI suggestions now indicate fix location (📝 Prompt or 📚 RAG Definitions). Added "How to use" sections to batch_testing.py. |
+| 2.2 | 2026-02-24 | **Enhanced Feedback Loop**: Added Section 5.4 with full Feedback Loop page specification. Features: time period filter (7/30/90 days), RAG indicator context filled for AI analysis, increased limits (500 base, 200 detailed, 150 for AI), full indicator context in rejections (ID, name, LLM reasoning, confidence). AI suggestions now indicate fix location (Prompt or RAG Definitions). Added "How to use" sections to batch_testing.py. |
+| 2.3 | 2026-02-24 | **LLM-Optimized Detection Modes**: Added 5 new columns to DRI_RULES: DETECTION_MODE, CLINICAL_GUIDANCE, INCLUSION_TERMS, EXCLUSION_PATTERNS, REGULATORY_REFERENCE. Detection modes: clinical_reasoning (default), structured_data, threshold_aggregation, keyword_guidance. All 33 deficits updated with LLM-optimized settings. Prompt v0009 created with clinical reasoning approach. Legacy rule types retained with "(legacy)" suffix in UI. |

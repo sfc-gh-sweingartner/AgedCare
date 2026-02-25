@@ -1044,11 +1044,47 @@ This section documents the complete business rules for all 33 DRI deficit indica
 
 ### B.2 Rule Types
 
+The original Telstra Health solution used regex-based rule types. The LLM-optimized solution introduces new detection modes that leverage clinical reasoning.
+
+#### B.2.1 Legacy Rule Types (from Regex Solution)
+
 | Rule Type | Description | Example |
 |-----------|-------------|--------|
 | `keyword_search` | Regex/keyword matching in free-text fields | "COPD", "asthma" in progress notes |
 | `specific_value` | Exact dropdown/selection value matching | "Fall" in Type of Incident dropdown |
 | `aggregation` | Count/percentage-based thresholds | ≥5 medications = polypharmacy |
+
+#### B.2.2 LLM-Optimized Detection Modes (v2.3)
+
+The LLM solution introduces four **detection modes** that leverage clinical reasoning instead of simple keyword matching:
+
+| Detection Mode | Description | Best For | Accuracy Benefit |
+|----------------|-------------|----------|------------------|
+| `clinical_reasoning` | LLM uses medical knowledge to identify conditions. Clinical guidance and inclusion terms provide hints, but the LLM can recognize conditions even with different terminology. | Most chronic conditions (Respiratory, Cardiac, Dementia, etc.) | Catches synonyms, abbreviations, clinical context |
+| `structured_data` | Direct lookup from structured fields (dropdowns, coded values, chart data). Uses exact matching on form responses. | Falls (incident type), Pain (chart scores), ADL (chart selections) | High precision for coded data |
+| `threshold_aggregation` | Count-based rules comparing totals to thresholds. LLM counts items and applies threshold logic. | Polypharmacy (5+ meds), Incontinence (50%+ episodes) | Accurate counting with exclusions |
+| `keyword_guidance` | LLM reasoning guided by specific terminology required for regulatory compliance. More strict adherence to inclusion terms. | When specific clinical terms must be matched for audit purposes | Regulatory compliance |
+
+#### B.2.3 LLM Rule Configuration Fields
+
+Each deficit rule now includes additional fields for LLM optimization:
+
+| Field | Purpose | Example |
+|-------|---------|---------|
+| `DETECTION_MODE` | How the LLM should approach identification | `clinical_reasoning` |
+| `CLINICAL_GUIDANCE` | Instructions for the LLM on what to look for | "Identify cardiac conditions that increase frailty risk. Look for heart rhythm disorders..." |
+| `INCLUSION_TERMS` | Keywords/phrases that suggest the condition (hints, not constraints) | "atrial fibrillation, AF, Afib, heart failure, CHF..." |
+| `EXCLUSION_PATTERNS` | Phrases that negate findings | "no cardiac issues, family history of heart disease" |
+| `REGULATORY_REFERENCE` | Source standards for compliance tracking | "ACQSC QI Program - Falls; AN-ACC falls domain" |
+
+#### B.2.4 Detection Mode Selection Guidelines
+
+| Scenario | Recommended Mode |
+|----------|------------------|
+| Chronic conditions identified from free-text notes/diagnoses | `clinical_reasoning` |
+| Events captured in structured form dropdowns | `structured_data` |
+| Conditions based on counts or percentages | `threshold_aggregation` |
+| Regulatory audit requiring specific terminology | `keyword_guidance` |
 
 ### B.3 Functions
 
@@ -1236,10 +1272,11 @@ All historical versions are retained for audit purposes.
 | 2.0 | 2026-02-22 | **Feedback Loop Page v2.0**: Initial feedback loop with rejection analysis and AI suggestions |
 | 2.1 | 2026-02-24 | **Unified DRI_RULES Table**: Replaced multiple tables with unified DRI_RULES. Added DRI_CLINICAL_DECISIONS. Per-deficit versioning (D001-0001 format). |
 | 2.2 | 2026-02-24 | **Enhanced Feedback Loop v2.2**: Added time period filter (7/30/90 days), RAG indicator context for AI analysis, increased query limits (500/200/150), full LLM context in rejections (reasoning, confidence), location badges for AI suggestions (📝 Prompt vs 📚 RAG Definitions). |
+| 2.3 | 2026-02-24 | **LLM-Optimized Detection Modes**: Added 4 new detection modes (clinical_reasoning, structured_data, threshold_aggregation, keyword_guidance) to replace regex-based approach. Added DETECTION_MODE, CLINICAL_GUIDANCE, INCLUSION_TERMS, EXCLUSION_PATTERNS, REGULATORY_REFERENCE columns to DRI_RULES. All 33 deficits updated with LLM-optimized settings. Prompt v0009 created with clinical reasoning approach. Legacy rule types retained with "(legacy)" suffix. |
 
 ---
 
-*Document Version: 2.2*  
+*Document Version: 2.3*  
 *Created: 2025-01-27*  
 *Updated: 2026-02-24*  
 *Status: Approved*

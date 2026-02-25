@@ -158,6 +158,8 @@ def get_rag_indicators(session) -> str:
     indicators = session.sql("""
         SELECT DEFICIT_ID, DEFICIT_NAME, DEFICIT_TYPE, 
                EXPIRY_DAYS, RENEWAL_REMINDER_DAYS, LOOKBACK_DAYS_HISTORIC,
+               DETECTION_MODE, CLINICAL_GUIDANCE, INCLUSION_TERMS, 
+               EXCLUSION_PATTERNS, REGULATORY_REFERENCE, MULTI_RULE_GUIDANCE,
                TO_JSON(RULES_JSON) as RULES_JSON
         FROM AGEDCARE.AGEDCARE.DRI_RULES
         WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
@@ -166,15 +168,24 @@ def get_rag_indicators(session) -> str:
     
     indicator_text = ["=== DRI_RULES TABLE ==="]
     for ind in indicators:
-        indicator_text.append(f"""
-DEFICIT_ID: {ind['DEFICIT_ID']}
-DEFICIT_NAME: {ind['DEFICIT_NAME']}
+        entry = f"""
+=== {ind['DEFICIT_ID']} - {ind['DEFICIT_NAME']} ===
 DEFICIT_TYPE: {ind['DEFICIT_TYPE']}
-EXPIRY_DAYS: {ind['EXPIRY_DAYS'] or 0}
-RENEWAL_REMINDER_DAYS: {ind['RENEWAL_REMINDER_DAYS'] or 7}
-LOOKBACK_DAYS_HISTORIC: {ind['LOOKBACK_DAYS_HISTORIC'] or 'all'}
-RULES_JSON: {ind['RULES_JSON'] or '[]'}
----""")
+DETECTION_MODE: {ind['DETECTION_MODE'] or 'clinical_reasoning'}"""
+        
+        if ind['MULTI_RULE_GUIDANCE']:
+            entry += f"\nMULTI_RULE_GUIDANCE: {ind['MULTI_RULE_GUIDANCE']}"
+        if ind['CLINICAL_GUIDANCE']:
+            entry += f"\nCLINICAL_GUIDANCE: {ind['CLINICAL_GUIDANCE']}"
+        if ind['INCLUSION_TERMS']:
+            entry += f"\nINCLUSION_TERMS: {ind['INCLUSION_TERMS']}"
+        if ind['EXCLUSION_PATTERNS']:
+            entry += f"\nEXCLUSION_PATTERNS: {ind['EXCLUSION_PATTERNS']}"
+        if ind['REGULATORY_REFERENCE']:
+            entry += f"\nREGULATORY_REFERENCE: {ind['REGULATORY_REFERENCE']}"
+        
+        entry += f"\nRULES_JSON: {ind['RULES_JSON'] or '[]'}\n---"
+        indicator_text.append(entry)
     return "\n".join(indicator_text)
 
 def calculate_dri_score(session, resident_id: int):

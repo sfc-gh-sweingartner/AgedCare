@@ -294,7 +294,7 @@ This is the **clinical decision workflow** for reviewing DRI indicators. The sys
                                         if st.session_state.get(reject_key, False):
                                             with st.form(key=f"reject_form_{row['QUEUE_ID']}_{ind_id}"):
                                                 reason = st.text_input("Rejection reason", placeholder="Why is this a false positive?")
-                                                suppress_days = st.selectbox("Suppress for", [7, 30, 90, 365], index=2, format_func=lambda x: f"{x} days")
+                                                suppress_days = st.selectbox("Suppress for", [0, 7, 30, 90, 365], index=3, format_func=lambda x: "No suppression" if x == 0 else f"{x} days")
                                                 
                                                 col_cancel, col_submit = st.columns(2)
                                                 with col_cancel:
@@ -329,16 +329,66 @@ This is the **clinical decision workflow** for reviewing DRI indicators. The sys
                                                         st.rerun()
                         
                         st.markdown("---")
-                        if st.button("✅ Mark Queue Item Complete", key=f"complete_{row['QUEUE_ID']}", use_container_width=True, type="primary"):
+                        if st.button("✅ Approve Remaining & Complete", key=f"complete_{row['QUEUE_ID']}", use_container_width=True, type="primary"):
+                            for ind_to_auto in indicators[:15]:
+                                ind_auto_id = ind_to_auto.get('deficit_id', '')
+                                ind_auto_name = ind_to_auto.get('deficit_name', 'Unknown')
+                                
+                                if ind_auto_id in existing_dict:
+                                    continue
+                                
+                                already_decided = execute_query(f"""
+                                    SELECT 1 FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                                    WHERE RESIDENT_ID = {row['RESIDENT_ID']}
+                                    AND DEFICIT_ID = '{ind_auto_id}'
+                                    AND STATUS = 'ACTIVE'
+                                    LIMIT 1
+                                """, session)
+                                
+                                if already_decided and len(already_decided) > 0:
+                                    continue
+                                
+                                already_rejected_now = execute_query(f"""
+                                    SELECT 1 FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS
+                                    WHERE QUEUE_ID = '{row['QUEUE_ID']}'
+                                    AND INDICATOR_ID = '{ind_auto_id}'
+                                    LIMIT 1
+                                """, session)
+                                
+                                if already_rejected_now and len(already_rejected_now) > 0:
+                                    continue
+                                
+                                rule_info_auto = rules_dict.get(ind_auto_id, {})
+                                deficit_type_auto = rule_info_auto.get('DEFICIT_TYPE', 'UNKNOWN') if rule_info_auto else 'UNKNOWN'
+                                default_expiry_auto = rule_info_auto.get('EXPIRY_DAYS', 0) if rule_info_auto else 0
+                                reminder_days_auto = rule_info_auto.get('RENEWAL_REMINDER_DAYS', 7) if rule_info_auto else 7
+                                
+                                expiry_date_auto = "NULL" if deficit_type_auto == 'PERSISTENT' else f"DATEADD(day, {default_expiry_auto}, CURRENT_DATE())"
+                                review_req_auto = "FALSE" if deficit_type_auto == 'PERSISTENT' else "TRUE"
+                                
+                                execute_query(f"""
+                                    INSERT INTO AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS (
+                                        RESIDENT_ID, CLIENT_SYSTEM_KEY, DEFICIT_ID, DEFICIT_NAME,
+                                        DECISION_TYPE, DECISION_REASON, DEFICIT_TYPE,
+                                        DEFAULT_EXPIRY_DAYS, EXPIRY_DATE, REVIEW_REQUIRED,
+                                        RENEWAL_REMINDER_DAYS, DECIDED_BY
+                                    ) VALUES (
+                                        {row['RESIDENT_ID']}, '{row['CLIENT_SYSTEM_KEY']}', '{ind_auto_id}', '{ind_auto_name.replace("'", "''")}',
+                                        'CONFIRMED', 'Auto-approved via Approve Remaining', '{deficit_type_auto}',
+                                        {default_expiry_auto}, {expiry_date_auto}, {review_req_auto},
+                                        {reminder_days_auto}, CURRENT_USER()
+                                    )
+                                """, session)
+                            
                             execute_query(f"""
                                 UPDATE AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE 
                                 SET STATUS = 'APPROVED', 
                                     REVIEW_TIMESTAMP = CURRENT_TIMESTAMP(),
                                     REVIEWER_USER = CURRENT_USER(),
-                                    REVIEWER_NOTES = 'Individual indicator decisions recorded'
+                                    REVIEWER_NOTES = 'Remaining indicators auto-approved'
                                 WHERE QUEUE_ID = '{row['QUEUE_ID']}'
                             """, session)
-                            st.success("Queue item marked complete!")
+                            st.success("Remaining indicators approved and queue item completed!")
                             st.rerun()
                     
                     elif row['STATUS'] in ['APPROVED', 'REJECTED']:

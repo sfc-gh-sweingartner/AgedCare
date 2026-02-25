@@ -9,226 +9,85 @@ if session:
     with st.expander("How to use this page", expanded=False, icon=":material/help:"):
         st.markdown("""
 ### Purpose
-This is the **administration hub** for configuring the DRI Intelligence system. It contains client settings, form mappings, DRI rules with versioning, and **production deployment settings**.
+This is the **administration hub** for configuring the DRI Intelligence system. DRI Rules are managed globally, while client-specific settings (including which rule versions to use) are configured per client.
 
 ### Tabs Overview
 
 | Tab | Purpose |
 |-----|---------|
-| **Client Config** | View/edit client details and full JSON configuration |
-| **Form Mappings** | See how client-specific form fields map to DRI indicators |
-| **DRI Rules** | View/edit all 33 deficit detection rules with **per-deficit versioning** |
-| **Processing Settings** | Configure production model, prompt, and batch schedule |
+| **DRI Rules** | View/edit all 33 deficit detection rules with **per-deficit versioning** (global - not client specific) |
+| **Client Settings** | Configure client-specific settings including which rule versions to use |
+
+---
+
+### Detection Modes (LLM-Optimized Rules)
+
+The DRI system uses four **detection modes** to identify deficit indicators:
+
+| Detection Mode | Description | Best For |
+|----------------|-------------|----------|
+| **clinical_reasoning** | LLM uses medical knowledge to identify conditions | Most chronic conditions |
+| **structured_data** | Direct lookup from structured fields | Falls, Pain, ADL |
+| **threshold_aggregation** | Count-based rules comparing totals to thresholds | Polypharmacy, Incontinence |
+| **keyword_guidance** | LLM reasoning guided by specific terminology | Regulatory compliance matching |
+
+---
 
 ### DRI Rules Tab
 - All 33 deficit rules are stored in the unified `DRI_RULES` table
 - Each deficit has its own version number (e.g., D001-0001, D001-0002)
-- **PERSISTENT deficits** (expiry_days=0) never expire once confirmed
-- **FLUCTUATING deficits** have configurable expiry (1-90 days)
-- Editing a rule creates a new version (old versions retained for audit)
+- **Editing always creates a new version** - old versions retained for audit
+- Rules are global - client-specific version assignments are in Client Settings
 
-### Processing Settings Tab
-This tab controls what runs during **nightly batch processing**:
-- **Production Model**: Which LLM model to use (recommend Claude 4.5 variants)
-- **Production Prompt**: Read-only display of current prompt; click **Save for production** to save a new version
-- **Prompt Versions**: Auto-incremented (v0001, v0002, etc.) - no manual entry needed
-- **Deficit Versions Table**: Shows current version of each of the 33 deficit rules
-- **Batch Schedule**: When the nightly job runs (cron format)
-- **Adaptive Token Sizing**: Threshold for standard vs large token mode
-
-### Adaptive Token Sizing
-The LLM analysis uses adaptive token sizing to optimize performance during batch processing. A pre-query measures each resident's context size (notes, meds, observations, forms) before calling the LLM.
-
-| Mode | Threshold | max_tokens | Speed | Use case |
-|------|-----------|------------|-------|----------|
-| **Standard** | Below threshold | 4,096 | Fast | Residents with few notes |
-| **Large** | Above threshold | 16,384 | Slower | Prevents truncation for complex cases |
-
-**Trade-offs:**
-- **Lower threshold** = More residents use large mode = Slower batch, but fewer truncation failures
-- **Higher threshold** = More residents use standard mode = Faster batch, but risk truncation for data-heavy residents
-
-### Workflow
-1. Test prompts in the **Prompt Engineering** page
-2. Once satisfied, come here to **Processing Settings**
-3. Select your tested model and review the prompt text
-4. Click **Save for production** to deploy with auto-incremented version
-5. The nightly batch will use these settings automatically
-
-### Tips
-- Always test thoroughly in Prompt Engineering before saving to production
-- Prompt versions are auto-incremented (v0001, v0002, etc.) - you don't need to type version numbers
-- Deficit rule versions are per-deficit (D001-0001, D002-0001) - editing D001 doesn't affect D002's version
+### Client Settings Tab
+- Select which **rule version** to use per deficit for each client
+- Configure production model, prompt, and batch schedule
+- Manage adaptive token sizing settings
         """)
 
-    clients = execute_query_df("""
-        SELECT CONFIG_ID, CLIENT_SYSTEM_KEY, CLIENT_NAME, IS_ACTIVE
-        FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG
-        ORDER BY CLIENT_NAME
-    """, session)
-    
-    if clients is not None and len(clients) > 0:
-        client_options = {f"{row['CLIENT_NAME']} ({row['CLIENT_SYSTEM_KEY']})": row['CONFIG_ID'] for _, row in clients.iterrows()}
-        
-        st.subheader("Select client")
-        selected_client_display = st.selectbox(
-            "Client",
-            list(client_options.keys()),
-            help="All configuration changes will apply to the selected client"
-        )
-        selected_config_id = client_options[selected_client_display]
-    else:
-        st.error("No clients found in configuration table", icon=":material/error:")
-        st.stop()
-    
-    st.warning("**Sample data:** The configuration below is mocked for demonstration. Modify these mappings to match your client's specific system.", icon=":material/warning:")
-    
-    tab1, tab2, tab3, tab4 = st.tabs(["Client config", "Form mappings", "DRI Rules", "Processing settings"])
+    tab1, tab2 = st.tabs(["DRI Rules", "Client Settings"])
     
     with tab1:
-        st.subheader("Client configuration")
-        
-        config_data = execute_query_df(f"""
-            SELECT CONFIG_ID, CLIENT_SYSTEM_KEY, CLIENT_NAME, DESCRIPTION, 
-                   VERSION, IS_ACTIVE, CREATED_BY, CREATED_TIMESTAMP,
-                   TO_JSON(CONFIG_JSON) as CONFIG_JSON_TEXT
-            FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG
-            WHERE CONFIG_ID = '{selected_config_id}'
-        """, session)
-        
-        if config_data is not None and len(config_data) > 0:
-            row = config_data.iloc[0]
-            if row['IS_ACTIVE']:
-                st.badge("Active", icon=":material/check:", color="green")
-            else:
-                st.badge("Inactive", color="gray")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown(f"**System key:** `{row['CLIENT_SYSTEM_KEY']}`")
-                st.markdown(f"**Version:** {row['VERSION']}")
-                st.markdown(f"**Created by:** {row['CREATED_BY']}")
-            with col2:
-                st.markdown(f"**Description:** {row['DESCRIPTION']}")
-                st.markdown(f"**Created:** {row['CREATED_TIMESTAMP']}")
-            
-            st.markdown("**Full configuration JSON:**")
-            try:
-                config_json = json.loads(row['CONFIG_JSON_TEXT'])
-                st.json(config_json)
-            except:
-                st.code(row['CONFIG_JSON_TEXT'])
-    
-    with tab2:
-        st.subheader("Form mappings")
-        st.caption("Form mappings define how client-specific form fields map to standard DRI indicators.")
-        
-        client_key = execute_query(f"""
-            SELECT CLIENT_SYSTEM_KEY FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG WHERE CONFIG_ID = '{selected_config_id}'
-        """, session)
-        client_system_key = client_key[0]['CLIENT_SYSTEM_KEY'] if client_key else None
-        
-        mappings = execute_query_df(f"""
-            SELECT MAPPING_ID, CLIENT_SYSTEM_KEY, SOURCE_TABLE, FORM_IDENTIFIER,
-                   FIELD_NAME, MAPPED_INDICATOR, MAPPING_TYPE, IS_ACTIVE, NOTES
-            FROM AGEDCARE.AGEDCARE.DRI_CLIENT_FORM_MAPPINGS
-            WHERE CLIENT_SYSTEM_KEY = '{client_system_key}'
-            ORDER BY SOURCE_TABLE, FIELD_NAME
-        """, session)
-        
-        if mappings is not None and len(mappings) > 0:
-            mappings_display = mappings[['SOURCE_TABLE', 'FORM_IDENTIFIER', 'FIELD_NAME', 'MAPPED_INDICATOR', 'MAPPING_TYPE', 'IS_ACTIVE']]
-            st.dataframe(mappings_display, use_container_width=True)
-            
-            st.markdown("**Mapping details:**")
-            for idx, row in mappings.iterrows():
-                if row['IS_ACTIVE']:
-                    st.markdown(f":material/check_circle: **{row['FIELD_NAME']}** → `{row['MAPPED_INDICATOR']}` ({row['MAPPING_TYPE']})")
-                else:
-                    st.markdown(f":material/circle: **{row['FIELD_NAME']}** → `{row['MAPPED_INDICATOR']}` ({row['MAPPING_TYPE']})")
-                if row['NOTES']:
-                    st.caption(f"   {row['NOTES']}")
-        else:
-            st.info("No form mappings found for this client", icon=":material/info:")
-    
-    with tab3:
         st.subheader("DRI Rules")
-        st.caption("Unified deficit detection rules with version control. Rules define how deficits are detected including temporal behavior, keywords, and thresholds.")
+        st.caption("Global deficit detection rules with version control. Editing creates a new version - select which versions to use per client in Client Settings.")
         
-        current_version = execute_query("""
-            SELECT DISTINCT VERSION_NUMBER, VERSION_DESCRIPTION 
-            FROM AGEDCARE.AGEDCARE.DRI_RULES 
-            WHERE IS_CURRENT_VERSION = TRUE
-            LIMIT 1
-        """, session)
-        
-        if current_version:
-            st.success(f"**Current Version:** {current_version[0]['VERSION_NUMBER']} - {current_version[0]['VERSION_DESCRIPTION'] or 'No description'}", icon=":material/verified:")
-        
-        dri_rules = execute_query_df("""
-            SELECT DEFICIT_NUMBER, DEFICIT_ID, DEFICIT_NAME, DOMAIN, DEFICIT_TYPE, 
-                   EXPIRY_DAYS, RENEWAL_REMINDER_DAYS, LOOKBACK_DAYS_HISTORIC,
-                   KEYWORDS_TO_SEARCH, RULES_JSON, IS_ACTIVE, VERSION_NUMBER
+        rules_data = execute_query_df("""
+            SELECT DISTINCT DEFICIT_ID, DEFICIT_NAME, DOMAIN, 
+                   MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN VERSION_NUMBER END) as LATEST_VERSION
             FROM AGEDCARE.AGEDCARE.DRI_RULES
-            WHERE IS_CURRENT_VERSION = TRUE
-            ORDER BY DEFICIT_NUMBER
+            GROUP BY DEFICIT_ID, DEFICIT_NAME, DOMAIN
+            ORDER BY DEFICIT_ID
         """, session)
         
-        if dri_rules is not None and len(dri_rules) > 0:
-            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1:
-                st.metric("Total deficits", len(dri_rules))
-            with col_m2:
-                persistent = len(dri_rules[dri_rules['DEFICIT_TYPE'] == 'PERSISTENT'])
-                st.metric("Persistent", persistent)
-            with col_m3:
-                fluctuating = len(dri_rules[dri_rules['DEFICIT_TYPE'] == 'FLUCTUATING'])
-                st.metric("Fluctuating", fluctuating)
-            with col_m4:
-                active_rules = len(dri_rules[dri_rules['IS_ACTIVE'] == True])
-                st.metric("Active", active_rules)
+        if rules_data is not None and len(rules_data) > 0:
+            col_sel1, col_sel2 = st.columns([2, 1])
+            with col_sel1:
+                deficit_options = {f"{row['DEFICIT_ID']}: {row['DEFICIT_NAME']}": row['DEFICIT_ID'] for _, row in rules_data.iterrows()}
+                selected_deficit_display = st.selectbox(
+                    "Select deficit to view/edit",
+                    list(deficit_options.keys()),
+                    help="Choose a deficit indicator to view or edit its detection rules"
+                )
+                selected_deficit = deficit_options[selected_deficit_display]
             
-            type_filter = st.selectbox("Filter by type", ["All", "PERSISTENT", "FLUCTUATING"], key="dri_type_filter")
-            domain_filter = st.selectbox("Filter by domain", ["All"] + sorted(dri_rules['DOMAIN'].unique().tolist()), key="dri_domain_filter")
+            deficit_row_query = execute_query(f"""
+                SELECT * FROM AGEDCARE.AGEDCARE.DRI_RULES 
+                WHERE DEFICIT_ID = '{selected_deficit}' AND IS_CURRENT_VERSION = TRUE
+            """, session)
             
-            filtered_rules = dri_rules.copy()
-            if type_filter != "All":
-                filtered_rules = filtered_rules[filtered_rules['DEFICIT_TYPE'] == type_filter]
-            if domain_filter != "All":
-                filtered_rules = filtered_rules[filtered_rules['DOMAIN'] == domain_filter]
-            
-            st.dataframe(
-                filtered_rules[['DEFICIT_ID', 'DEFICIT_NAME', 'DOMAIN', 'DEFICIT_TYPE', 'EXPIRY_DAYS', 'RENEWAL_REMINDER_DAYS', 'LOOKBACK_DAYS_HISTORIC']],
-                use_container_width=True,
-                column_config={
-                    'DEFICIT_ID': st.column_config.TextColumn('ID', width='small'),
-                    'DEFICIT_NAME': st.column_config.TextColumn('Deficit Name', width='medium'),
-                    'DOMAIN': st.column_config.TextColumn('Domain', width='medium'),
-                    'DEFICIT_TYPE': st.column_config.TextColumn('Type', width='small'),
-                    'EXPIRY_DAYS': st.column_config.NumberColumn('Expiry (days)', width='small', help='0 = Never expires (persistent)'),
-                    'RENEWAL_REMINDER_DAYS': st.column_config.NumberColumn('Reminder (days)', width='small', help='Days before expiry to show in review queue'),
-                    'LOOKBACK_DAYS_HISTORIC': st.column_config.TextColumn('Lookback', width='small')
-                }
-            )
-            
-            st.subheader("Rule details")
-            selected_deficit = st.selectbox(
-                "Select deficit to view full rules",
-                filtered_rules['DEFICIT_ID'].tolist(),
-                format_func=lambda x: f"{x} - {filtered_rules[filtered_rules['DEFICIT_ID']==x]['DEFICIT_NAME'].iloc[0]}",
-                key="dri_detail_select"
-            )
-            
-            if selected_deficit:
-                deficit_row = filtered_rules[filtered_rules['DEFICIT_ID'] == selected_deficit].iloc[0]
+            if deficit_row_query:
+                deficit_row = deficit_row_query[0].as_dict()
                 
                 with st.container(border=True):
                     st.markdown(f"### {deficit_row['DEFICIT_NAME']} ({deficit_row['DEFICIT_ID']})")
+                    st.caption(f"Current version: **{deficit_row['VERSION_NUMBER']}**")
                     
                     edit_mode = st.toggle("Edit mode", key=f"edit_mode_{selected_deficit}")
                     
                     if edit_mode:
-                        st.info("Edit the deficit settings below and click Save to update.", icon=":material/edit:")
+                        st.info("Edit the deficit settings below. Saving will create a **new version** of this rule.", icon=":material/edit:")
+                        
+                        st.markdown("**Deficit Settings**")
                         
                         edit_col1, edit_col2 = st.columns(2)
                         with edit_col1:
@@ -270,6 +129,16 @@ The LLM analysis uses adaptive token sizing to optimize performance during batch
                             )
                         
                         st.markdown("---")
+                        st.markdown("**Multi-Rule Orchestration**")
+                        edit_multi_rule_guidance = st.text_area(
+                            "Multi-Rule Guidance",
+                            value=deficit_row.get('MULTI_RULE_GUIDANCE', '') or '',
+                            height=100,
+                            key=f"edit_multi_rule_guidance_{selected_deficit}",
+                            help="Instructions for how to combine multiple rules (e.g., PRIMARY: clinical_reasoning, SECONDARY: keyword_guidance)"
+                        )
+                        
+                        st.markdown("---")
                         st.markdown("**Detection Rules**")
                         
                         try:
@@ -289,11 +158,14 @@ The LLM analysis uses adaptive token sizing to optimize performance during batch
                                                 index=0 if rule.get('rule_status', 'active') == 'active' else 1,
                                                 key=f"rule_status_{selected_deficit}_{i}"
                                             )
-                                            rule_type = st.selectbox(
-                                                "Rule Type",
-                                                ["keyword_search", "specific_value", "aggregation"],
-                                                index=["keyword_search", "specific_value", "aggregation"].index(rule.get('rule_type', 'keyword_search')),
-                                                key=f"rule_type_{selected_deficit}_{i}"
+                                            detection_mode_options = ["keyword_guidance", "clinical_reasoning", "structured_data", "threshold_aggregation"]
+                                            current_det_mode = rule.get('detection_mode', 'keyword_guidance')
+                                            det_mode_index = detection_mode_options.index(current_det_mode) if current_det_mode in detection_mode_options else 0
+                                            rule_detection_mode = st.selectbox(
+                                                "Detection Mode",
+                                                detection_mode_options,
+                                                index=det_mode_index,
+                                                key=f"rule_detection_mode_{selected_deficit}_{i}"
                                             )
                                             rule_source = st.selectbox(
                                                 "Source Table",
@@ -321,22 +193,64 @@ The LLM analysis uses adaptive token sizing to optimize performance during batch
                                                 key=f"rule_search_{selected_deficit}_{i}"
                                             )
                                         
+                                        rule_inclusion_terms = st.text_area(
+                                            "Inclusion Terms",
+                                            value=rule.get('inclusion_terms', '') or '',
+                                            height=80,
+                                            key=f"rule_inclusion_{selected_deficit}_{i}",
+                                            help="Keywords/phrases that suggest this condition (comma-separated)"
+                                        )
+                                        
+                                        rule_exclusion_patterns = st.text_area(
+                                            "Exclusion Patterns",
+                                            value=rule.get('exclusion_patterns', '') or '',
+                                            height=80,
+                                            key=f"rule_exclusion_{selected_deficit}_{i}",
+                                            help="Phrases that negate findings (comma-separated)"
+                                        )
+                                        
+                                        rule_clinical_guidance = st.text_area(
+                                            "Clinical Guidance",
+                                            value=rule.get('clinical_guidance', '') or '',
+                                            height=100,
+                                            key=f"rule_clinical_guidance_{selected_deficit}_{i}",
+                                            help="Instructions for the LLM on what to look for"
+                                        )
+                                        
+                                        rule_regulatory_ref = st.text_input(
+                                            "Regulatory Reference",
+                                            value=rule.get('regulatory_reference', '') or '',
+                                            key=f"rule_regulatory_ref_{selected_deficit}_{i}",
+                                            help="Source standards (ACQSC, AN-ACC)"
+                                        )
+                                        
                                         st.markdown("**Filters:**")
                                         functions = rule.get('functions', [])
+                                        if f'filters_{selected_deficit}_{i}' not in st.session_state:
+                                            st.session_state[f'filters_{selected_deficit}_{i}'] = list(functions) if functions else []
+                                        
+                                        filter_key_options = ["form_name", "element_name", "response", "progress_note_type", 
+                                                            "observation_value", "chart_name", "chart_label", "resident_id", "count"]
+                                        
                                         edited_functions = []
-                                        for j, func in enumerate(functions):
-                                            func_col1, func_col2, func_col3 = st.columns([1, 1, 2])
+                                        filters_to_display = st.session_state[f'filters_{selected_deficit}_{i}']
+                                        
+                                        for j, func in enumerate(filters_to_display):
+                                            func_col1, func_col2, func_col3, func_col4 = st.columns([1.5, 1.5, 3, 0.5])
                                             with func_col1:
                                                 func_type = st.selectbox(
                                                     "Type",
                                                     ["inclusion_filter", "exclusion_filter", "aggregation"],
-                                                    index=["inclusion_filter", "exclusion_filter", "aggregation"].index(func.get('function_type', 'inclusion_filter')),
+                                                    index=["inclusion_filter", "exclusion_filter", "aggregation"].index(func.get('function_type', 'inclusion_filter')) if func.get('function_type') in ["inclusion_filter", "exclusion_filter", "aggregation"] else 0,
                                                     key=f"func_type_{selected_deficit}_{i}_{j}"
                                                 )
                                             with func_col2:
-                                                func_key = st.text_input(
+                                                current_key = func.get('key', 'form_name')
+                                                key_index = filter_key_options.index(current_key) if current_key in filter_key_options else 0
+                                                func_key = st.selectbox(
                                                     "Key",
-                                                    value=func.get('key', ''),
+                                                    filter_key_options,
+                                                    index=key_index,
                                                     key=f"func_key_{selected_deficit}_{i}_{j}"
                                                 )
                                             with func_col3:
@@ -345,21 +259,40 @@ The LLM analysis uses adaptive token sizing to optimize performance during batch
                                                     value=func.get('value', ''),
                                                     key=f"func_value_{selected_deficit}_{i}_{j}"
                                                 )
+                                            with func_col4:
+                                                st.write("")
+                                                if st.button("🗑️", key=f"del_filter_{selected_deficit}_{i}_{j}", help="Delete filter"):
+                                                    st.session_state[f'filters_{selected_deficit}_{i}'].pop(j)
+                                                    st.rerun()
+                                            
                                             edited_functions.append({
                                                 "function_type": func_type,
                                                 "key": func_key,
                                                 "value": func_value
                                             })
                                         
+                                        if st.button("➕ Add Filter", key=f"add_filter_{selected_deficit}_{i}"):
+                                            st.session_state[f'filters_{selected_deficit}_{i}'].append({
+                                                "function_type": "inclusion_filter",
+                                                "key": "form_name",
+                                                "value": ""
+                                            })
+                                            st.rerun()
+                                        
                                         edited_rules.append({
                                             "rule_number": rule.get('rule_number', i+1),
                                             "rule_status": rule_status,
-                                            "rule_type": rule_type,
+                                            "rule_type": rule.get('rule_type', 'keyword_search'),
+                                            "detection_mode": rule_detection_mode,
                                             "rule_description": rule_desc,
                                             "source_type": rule_source,
                                             "source_table_description": rule.get('source_table_description', ''),
                                             "search_field": rule_search_field if rule_search_field else None,
                                             "threshold": rule_threshold,
+                                            "inclusion_terms": rule_inclusion_terms,
+                                            "exclusion_patterns": rule_exclusion_patterns,
+                                            "clinical_guidance": rule_clinical_guidance,
+                                            "regulatory_reference": rule_regulatory_ref,
                                             "functions": edited_functions
                                         })
                             
@@ -369,32 +302,63 @@ The LLM analysis uses adaptive token sizing to optimize performance during batch
                             st.error(f"Error parsing rules for editing: {e}")
                         
                         st.markdown("---")
-                        if st.button("Save Deficit Changes", type="primary", key=f"save_deficit_{selected_deficit}", icon=":material/save:"):
-                            try:
-                                edited_rules_json = json.dumps(st.session_state.get(f'edited_rules_{selected_deficit}', []))
-                                escaped_rules = edited_rules_json.replace("'", "''")
-                                
-                                execute_query(f"""
-                                    UPDATE AGEDCARE.AGEDCARE.DRI_RULES 
-                                    SET 
-                                        DEFICIT_TYPE = '{edit_deficit_type}',
-                                        DOMAIN = '{edit_domain}',
-                                        EXPIRY_DAYS = {edit_expiry},
-                                        RENEWAL_REMINDER_DAYS = {edit_reminder},
-                                        LOOKBACK_DAYS_HISTORIC = '{edit_lookback}',
-                                        IS_ACTIVE = {edit_active},
-                                        RULES_JSON = PARSE_JSON('{escaped_rules}'),
-                                        MODIFIED_BY = CURRENT_USER(),
-                                        MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
-                                    WHERE DEFICIT_ID = '{selected_deficit}' AND IS_CURRENT_VERSION = TRUE
-                                """, session)
-                                st.success(f"Saved changes for {selected_deficit}", icon=":material/check_circle:")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Failed to save: {e}", icon=":material/error:")
+                        st.markdown("**Save as New Version**")
+                        
+                        current_version = deficit_row['VERSION_NUMBER']
+                        if current_version and '-' in current_version:
+                            prefix = current_version.split('-')[0]
+                            current_num = int(current_version.split('-')[1])
+                            next_version = f"{prefix}-{current_num + 1:04d}"
+                        else:
+                            next_version = f"{selected_deficit}-0001"
+                        
+                        st.info(f"Current version: **{current_version}** → New version: **{next_version}**", icon=":material/info:")
+                        new_version_desc = st.text_input("Version description (required)", value="", key="new_rule_desc", placeholder="Describe what changed...")
+                        
+                        if st.button("Save as New Version", type="primary", key=f"save_new_version_{selected_deficit}", icon=":material/save:", disabled=not new_version_desc):
+                            if not new_version_desc:
+                                st.error("Please provide a version description", icon=":material/error:")
+                            else:
+                                try:
+                                    edited_rules_json = json.dumps(st.session_state.get(f'edited_rules_{selected_deficit}', []))
+                                    escaped_rules = edited_rules_json.replace("'", "''")
+                                    escaped_multi_rule_guidance = (edit_multi_rule_guidance or '').replace("'", "''")
+                                    escaped_version_desc = new_version_desc.replace("'", "''")
+                                    escaped_domain = (edit_domain or '').replace("'", "''")
+                                    escaped_deficit_name = (deficit_row['DEFICIT_NAME'] or '').replace("'", "''")
+                                    lookback_value = f"'{edit_lookback}'" if edit_lookback and edit_lookback.lower() != 'none' else 'NULL'
+                                    lookback_delta = deficit_row['LOOKBACK_DAYS_DELTA'] if deficit_row['LOOKBACK_DAYS_DELTA'] is not None else 1
+                                    
+                                    execute_query(f"""
+                                        INSERT INTO AGEDCARE.AGEDCARE.DRI_RULES (
+                                            VERSION_NUMBER, VERSION_DESCRIPTION, IS_CURRENT_VERSION,
+                                            DEFICIT_NUMBER, DEFICIT_ID, DOMAIN, DEFICIT_NAME, DEFICIT_TYPE,
+                                            EXPIRY_DAYS, LOOKBACK_DAYS_HISTORIC, LOOKBACK_DAYS_DELTA,
+                                            RENEWAL_REMINDER_DAYS, RULES_JSON, MULTI_RULE_GUIDANCE,
+                                            IS_ACTIVE, CREATED_BY
+                                        )
+                                        SELECT
+                                            '{next_version}', '{escaped_version_desc}', TRUE,
+                                            {deficit_row['DEFICIT_NUMBER']}, '{selected_deficit}', '{escaped_domain}', 
+                                            '{escaped_deficit_name}', '{edit_deficit_type}',
+                                            {edit_expiry}, {lookback_value}, {lookback_delta},
+                                            {edit_reminder}, PARSE_JSON('{escaped_rules}'), '{escaped_multi_rule_guidance}',
+                                            {edit_active}, CURRENT_USER()
+                                    """, session)
+                                    
+                                    execute_query(f"""
+                                        UPDATE AGEDCARE.AGEDCARE.DRI_RULES 
+                                        SET IS_CURRENT_VERSION = FALSE 
+                                        WHERE DEFICIT_ID = '{selected_deficit}' AND VERSION_NUMBER != '{next_version}'
+                                    """, session)
+                                    
+                                    st.success(f"Created new version: {next_version}", icon=":material/check_circle:")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to save: {e}", icon=":material/error:")
                     
                     else:
-                        col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+                        col_d1, col_d2, col_d3 = st.columns(3)
                         with col_d1:
                             if deficit_row['DEFICIT_TYPE'] == 'PERSISTENT':
                                 st.badge("PERSISTENT", icon=":material/all_inclusive:", color="blue")
@@ -405,12 +369,14 @@ The LLM analysis uses adaptive token sizing to optimize performance during batch
                         with col_d3:
                             expiry = deficit_row['EXPIRY_DAYS']
                             st.markdown(f"**Expiry:** {expiry if expiry > 0 else 'Never'}")
-                        with col_d4:
-                            st.markdown(f"**Reminder:** {deficit_row['RENEWAL_REMINDER_DAYS']} days")
                         
                         st.markdown("---")
-                        st.markdown(f"**Lookback period:** {deficit_row['LOOKBACK_DAYS_HISTORIC']}")
-                        st.markdown(f"**Active:** {'Yes' if deficit_row['IS_ACTIVE'] else 'No'}")
+                        st.markdown(f"**Lookback period:** {deficit_row['LOOKBACK_DAYS_HISTORIC']} | **Reminder:** {deficit_row['RENEWAL_REMINDER_DAYS']} days | **Active:** {'Yes' if deficit_row['IS_ACTIVE'] else 'No'}")
+                        
+                        if deficit_row.get('MULTI_RULE_GUIDANCE'):
+                            st.markdown("---")
+                            st.markdown("**Multi-Rule Orchestration:**")
+                            st.info(deficit_row['MULTI_RULE_GUIDANCE'], icon=":material/psychology:")
                         
                         st.markdown("---")
                         st.markdown("**Detection Rules:**")
@@ -447,9 +413,31 @@ The LLM analysis uses adaptive token sizing to optimize performance during batch
                                         with rule_cols[3]:
                                             st.markdown(f"**Threshold:** {rule.get('threshold', 1)}")
                                         
+                                        rule_detection_mode = rule.get('detection_mode') or deficit_row.get('DETECTION_MODE') or 'keyword_search'
+                                        st.markdown(f"**Detection Mode:** `{rule_detection_mode}`")
+                                        
                                         search_field = rule.get('search_field')
                                         if search_field and str(search_field) != 'nan':
                                             st.markdown(f"**Search field:** `{search_field}`")
+                                        
+                                        rule_inclusion = rule.get('inclusion_terms')
+                                        if rule_inclusion:
+                                            st.markdown("**Inclusion Terms:**")
+                                            st.code(rule_inclusion, language=None)
+                                        
+                                        rule_exclusion = rule.get('exclusion_patterns')
+                                        if rule_exclusion:
+                                            st.markdown("**Exclusion Patterns:**")
+                                            st.code(rule_exclusion, language=None)
+                                        
+                                        rule_clinical_guidance = rule.get('clinical_guidance')
+                                        if rule_clinical_guidance:
+                                            st.markdown("**Clinical Guidance:**")
+                                            st.info(rule_clinical_guidance, icon=":material/psychology:")
+                                        
+                                        rule_regulatory_ref = rule.get('regulatory_reference')
+                                        if rule_regulatory_ref:
+                                            st.markdown(f"**Regulatory Reference:** {rule_regulatory_ref}")
                                         
                                         functions = rule.get('functions', [])
                                         if functions:
@@ -471,245 +459,260 @@ The LLM analysis uses adaptive token sizing to optimize performance during batch
                             st.json(deficit_row['RULES_JSON'])
             
             st.markdown("---")
-            st.subheader("Version management")
-            
-            with st.expander("Create new version of this deficit", expanded=False):
-                current_version = deficit_row['VERSION_NUMBER']
-                if current_version and '-' in current_version:
-                    prefix = current_version.split('-')[0]
-                    current_num = int(current_version.split('-')[1])
-                    next_version = f"{prefix}-{current_num + 1:04d}"
-                else:
-                    next_version = f"{selected_deficit}-0001"
-                
-                st.info(f"Current version: **{current_version}** → New version: **{next_version}**", icon=":material/info:")
-                new_version_desc = st.text_input("Version description", value="Updated rules", key="new_rule_desc")
-                
-                if st.button("Save as new version", key="save_new_version", icon=":material/save:"):
-                    try:
-                        execute_query(f"""
-                            UPDATE AGEDCARE.AGEDCARE.DRI_RULES 
-                            SET IS_CURRENT_VERSION = FALSE 
-                            WHERE DEFICIT_ID = '{selected_deficit}' AND IS_CURRENT_VERSION = TRUE
-                        """, session)
-                        
-                        execute_query(f"""
-                            INSERT INTO AGEDCARE.AGEDCARE.DRI_RULES (
-                                VERSION_NUMBER, VERSION_DESCRIPTION, IS_CURRENT_VERSION,
-                                DEFICIT_NUMBER, DEFICIT_ID, DOMAIN, DEFICIT_NAME, DEFICIT_TYPE,
-                                EXPIRY_DAYS, LOOKBACK_DAYS_HISTORIC, LOOKBACK_DAYS_DELTA,
-                                RENEWAL_REMINDER_DAYS, KEYWORDS_TO_SEARCH, RULES_JSON,
-                                IS_ACTIVE, CREATED_BY
-                            )
-                            SELECT 
-                                '{next_version}', '{new_version_desc}', TRUE,
-                                DEFICIT_NUMBER, DEFICIT_ID, DOMAIN, DEFICIT_NAME, DEFICIT_TYPE,
-                                EXPIRY_DAYS, LOOKBACK_DAYS_HISTORIC, LOOKBACK_DAYS_DELTA,
-                                RENEWAL_REMINDER_DAYS, KEYWORDS_TO_SEARCH, RULES_JSON,
-                                IS_ACTIVE, CURRENT_USER()
-                            FROM AGEDCARE.AGEDCARE.DRI_RULES
-                            WHERE DEFICIT_ID = '{selected_deficit}' AND VERSION_NUMBER = '{current_version}'
-                        """, session)
-                        st.success(f"Created new version: {next_version}", icon=":material/check_circle:")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to create version: {e}", icon=":material/error:")
+            st.subheader("Version History")
             
             all_versions = execute_query_df(f"""
-                SELECT VERSION_NUMBER, VERSION_DESCRIPTION, IS_CURRENT_VERSION, CREATED_TIMESTAMP
+                SELECT VERSION_NUMBER, VERSION_DESCRIPTION, CREATED_BY, CREATED_TIMESTAMP
                 FROM AGEDCARE.AGEDCARE.DRI_RULES
                 WHERE DEFICIT_ID = '{selected_deficit}'
                 ORDER BY CREATED_TIMESTAMP DESC
             """, session)
             
             if all_versions is not None and len(all_versions) > 0:
-                st.caption("Version history for this deficit:")
-                st.dataframe(all_versions, use_container_width=True)
+                st.dataframe(all_versions, use_container_width=True, hide_index=True)
         else:
-            st.info("No DRI rules found. Please load rules from the business rules template.", icon=":material/info:")
+            st.info("No DRI rules found.", icon=":material/info:")
             
-    with tab4:
-        st.subheader("Processing settings")
-        st.caption("All production settings for nightly batch processing are stored per-client in this table. The batch job reads this configuration directly.")
+    with tab2:
+        st.subheader("Client Settings")
+        st.caption("Configure client-specific settings including which rule versions to use for each deficit.")
         
-        db_production_config = execute_query(f"""
-            SELECT 
-                CONFIG_JSON:production_settings:model::VARCHAR as PROD_MODEL,
-                CONFIG_JSON:production_settings:prompt_text::VARCHAR as PROD_PROMPT_TEXT,
-                CONFIG_JSON:production_settings:prompt_version::VARCHAR as PROD_PROMPT_VERSION,
-                CONFIG_JSON:production_settings:batch_schedule::VARCHAR as BATCH_SCHEDULE,
-                CONFIG_JSON:client_settings:context_threshold::NUMBER as CONTEXT_THRESHOLD
-            FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
-            WHERE CONFIG_ID = '{selected_config_id}'
+        clients = execute_query_df("""
+            SELECT CONFIG_ID, CLIENT_SYSTEM_KEY, CLIENT_NAME, IS_ACTIVE
+            FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG
+            ORDER BY CLIENT_NAME
         """, session)
         
-        prod_model = db_production_config[0]['PROD_MODEL'] if db_production_config and db_production_config[0]['PROD_MODEL'] else 'claude-3-5-sonnet'
-        prod_prompt_text = db_production_config[0]['PROD_PROMPT_TEXT'] if db_production_config and db_production_config[0]['PROD_PROMPT_TEXT'] else None
-        prod_prompt_version = db_production_config[0]['PROD_PROMPT_VERSION'] if db_production_config and db_production_config[0]['PROD_PROMPT_VERSION'] else 'v0001'
-        batch_schedule = db_production_config[0]['BATCH_SCHEDULE'] if db_production_config and db_production_config[0]['BATCH_SCHEDULE'] else '0 0 * * *'
-        db_threshold = db_production_config[0]['CONTEXT_THRESHOLD'] if db_production_config and db_production_config[0]['CONTEXT_THRESHOLD'] else 6000
-        
-        with st.container(border=True):
-            st.markdown("**Current Production Settings Summary**")
-            summary_cols = st.columns(4)
-            with summary_cols[0]:
-                st.markdown(f"**Prompt:** {prod_prompt_version}")
-            with summary_cols[1]:
-                st.markdown(f"**Model:** {prod_model}")
-            with summary_cols[2]:
-                st.markdown(f"**Schedule:** {batch_schedule}")
-            with summary_cols[3]:
-                st.markdown(f"**Token Threshold:** {db_threshold:,}")
-        
-        st.subheader("Production model")
-        st.caption(f"Current production model: **{prod_model}**")
-        
-        model_options = [
-            'claude-sonnet-4-6',
-            'claude-sonnet-4-5',
-            'claude-opus-4-5',
-            'claude-haiku-4-5',
-            'claude-3-5-sonnet',
-            'claude-3-7-sonnet',
-            'mistral-large2',
-            'llama3.1-70b',
-            'llama3.1-405b',
-            'llama3.3-70b',
-            'snowflake-llama-3.3-70b',
-            'deepseek-r1'
-        ]
-        
-        default_model_idx = model_options.index(prod_model) if prod_model in model_options else 3
-        selected_prod_model = st.selectbox(
-            "Select model for production",
-            model_options,
-            index=default_model_idx,
-            help="This model will be used by the nightly batch process"
-        )
-        
-
-        
-        st.subheader("Production prompt")
-        
-        prompt_versions = execute_query_df("""
-            SELECT VERSION_NUMBER, DESCRIPTION, PROMPT_TEXT, IS_ACTIVE, CREATED_TIMESTAMP
-            FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS
-            ORDER BY CREATED_TIMESTAMP DESC
-        """, session)
-        
-        if prompt_versions is not None and len(prompt_versions) > 0:
-            version_list = prompt_versions['VERSION_NUMBER'].tolist()
-            default_prompt_idx = version_list.index(prod_prompt_version) if prod_prompt_version in version_list else 0
+        if clients is not None and len(clients) > 0:
+            client_options = {f"{row['CLIENT_NAME']} ({row['CLIENT_SYSTEM_KEY']})": row for _, row in clients.iterrows()}
             
-            selected_prompt_version = st.selectbox(
-                "Prompt version",
-                version_list,
-                index=default_prompt_idx,
-                help="Select the prompt version to use for production"
+            selected_client_display = st.selectbox(
+                "Select client",
+                list(client_options.keys()),
+                help="All settings on this tab apply to the selected client"
+            )
+            selected_client = client_options[selected_client_display]
+            selected_config_id = selected_client['CONFIG_ID']
+            selected_client_key = selected_client['CLIENT_SYSTEM_KEY']
+            
+            st.markdown("---")
+            
+            db_production_config = execute_query(f"""
+                SELECT 
+                    CONFIG_JSON:production_settings:model::VARCHAR as PROD_MODEL,
+                    CONFIG_JSON:production_settings:prompt_text::VARCHAR as PROD_PROMPT_TEXT,
+                    CONFIG_JSON:production_settings:prompt_version::VARCHAR as PROD_PROMPT_VERSION,
+                    CONFIG_JSON:production_settings:batch_schedule::VARCHAR as BATCH_SCHEDULE,
+                    CONFIG_JSON:client_settings:context_threshold::NUMBER as CONTEXT_THRESHOLD
+                FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
+                WHERE CONFIG_ID = '{selected_config_id}'
+            """, session)
+            
+            prod_model = db_production_config[0]['PROD_MODEL'] if db_production_config and db_production_config[0]['PROD_MODEL'] else 'claude-3-5-sonnet'
+            prod_prompt_version = db_production_config[0]['PROD_PROMPT_VERSION'] if db_production_config and db_production_config[0]['PROD_PROMPT_VERSION'] else 'v0001'
+            batch_schedule = db_production_config[0]['BATCH_SCHEDULE'] if db_production_config and db_production_config[0]['BATCH_SCHEDULE'] else '0 0 * * *'
+            db_threshold = db_production_config[0]['CONTEXT_THRESHOLD'] if db_production_config and db_production_config[0]['CONTEXT_THRESHOLD'] else 6000
+            
+            with st.container(border=True):
+                st.markdown("**Current Production Settings Summary**")
+                summary_cols = st.columns(4)
+                with summary_cols[0]:
+                    st.markdown(f"**Prompt:** {prod_prompt_version}")
+                with summary_cols[1]:
+                    st.markdown(f"**Model:** {prod_model}")
+                with summary_cols[2]:
+                    st.markdown(f"**Schedule:** {batch_schedule}")
+                with summary_cols[3]:
+                    st.markdown(f"**Token Threshold:** {db_threshold:,}")
+            
+            st.subheader("Deficit Rule Versions")
+            st.caption("Select which version of each deficit rule to use for this client's batch processing.")
+            
+            all_deficit_versions = execute_query_df("""
+                SELECT DEFICIT_ID, DEFICIT_NAME, VERSION_NUMBER, VERSION_DESCRIPTION, CREATED_TIMESTAMP
+                FROM AGEDCARE.AGEDCARE.DRI_RULES
+                ORDER BY DEFICIT_ID, CREATED_TIMESTAMP DESC
+            """, session)
+            
+            client_assignments = execute_query_df(f"""
+                SELECT DEFICIT_ID, RULE_VERSION
+                FROM AGEDCARE.AGEDCARE.DRI_CLIENT_RULE_ASSIGNMENTS
+                WHERE CLIENT_SYSTEM_KEY = '{selected_client_key}'
+            """, session)
+            
+            if client_assignments is not None:
+                assignment_dict = dict(zip(client_assignments['DEFICIT_ID'], client_assignments['RULE_VERSION']))
+            else:
+                assignment_dict = {}
+            
+            if all_deficit_versions is not None and len(all_deficit_versions) > 0:
+                unique_deficits = all_deficit_versions[['DEFICIT_ID', 'DEFICIT_NAME']].drop_duplicates()
+                
+                updated_assignments = {}
+                
+                for _, deficit in unique_deficits.iterrows():
+                    deficit_id = deficit['DEFICIT_ID']
+                    deficit_name = deficit['DEFICIT_NAME']
+                    
+                    versions_for_deficit = all_deficit_versions[all_deficit_versions['DEFICIT_ID'] == deficit_id]
+                    version_options = versions_for_deficit['VERSION_NUMBER'].tolist()
+                    
+                    current_assignment = assignment_dict.get(deficit_id, version_options[0] if version_options else None)
+                    
+                    col1, col2 = st.columns([3, 2])
+                    with col1:
+                        st.markdown(f"**{deficit_id}:** {deficit_name}")
+                    with col2:
+                        if version_options:
+                            default_idx = version_options.index(current_assignment) if current_assignment in version_options else 0
+                            selected_version = st.selectbox(
+                                f"Version for {deficit_id}",
+                                version_options,
+                                index=default_idx,
+                                key=f"version_select_{deficit_id}",
+                                label_visibility="collapsed"
+                            )
+                            updated_assignments[deficit_id] = selected_version
+                
+                st.session_state['updated_rule_assignments'] = updated_assignments
+            
+            st.markdown("---")
+            st.subheader("Production Model")
+            
+            model_options = [
+                'claude-sonnet-4-6',
+                'claude-sonnet-4-5',
+                'claude-opus-4-5',
+                'claude-haiku-4-5',
+                'claude-3-5-sonnet',
+                'claude-3-7-sonnet',
+                'mistral-large2',
+                'llama3.1-70b',
+                'llama3.1-405b',
+                'llama3.3-70b',
+                'snowflake-llama-3.3-70b',
+                'deepseek-r1'
+            ]
+            
+            default_model_idx = model_options.index(prod_model) if prod_model in model_options else 3
+            selected_prod_model = st.selectbox(
+                "Select model for production",
+                model_options,
+                index=default_model_idx,
+                help="This model will be used by the nightly batch process"
             )
             
-            selected_prompt_info = prompt_versions[prompt_versions['VERSION_NUMBER'] == selected_prompt_version].iloc[0]
-            st.caption(f"{selected_prompt_info['DESCRIPTION']} | Created: {selected_prompt_info['CREATED_TIMESTAMP']}")
+            st.subheader("Production Prompt")
             
-            prompt_text_display = selected_prompt_info['PROMPT_TEXT']
+            prompt_versions = execute_query_df("""
+                SELECT VERSION_NUMBER, DESCRIPTION, PROMPT_TEXT, IS_ACTIVE, CREATED_TIMESTAMP
+                FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS
+                ORDER BY CREATED_TIMESTAMP DESC
+            """, session)
             
-            st.text_area(
-                "Prompt text (read-only)",
-                value=prompt_text_display,
-                height=300,
-                disabled=True,
-                help="This prompt text will be used for nightly batch processing"
+            if prompt_versions is not None and len(prompt_versions) > 0:
+                version_list = prompt_versions['VERSION_NUMBER'].tolist()
+                default_prompt_idx = version_list.index(prod_prompt_version) if prod_prompt_version in version_list else 0
+                
+                selected_prompt_version = st.selectbox(
+                    "Prompt version",
+                    version_list,
+                    index=default_prompt_idx,
+                    help="Select the prompt version to use for production"
+                )
+                
+                selected_prompt_info = prompt_versions[prompt_versions['VERSION_NUMBER'] == selected_prompt_version].iloc[0]
+                st.caption(f"{selected_prompt_info['DESCRIPTION']} | Created: {selected_prompt_info['CREATED_TIMESTAMP']}")
+                
+                prompt_text_display = selected_prompt_info['PROMPT_TEXT']
+                
+                with st.expander("View prompt text", expanded=False):
+                    st.text_area(
+                        "Prompt text (read-only)",
+                        value=prompt_text_display,
+                        height=300,
+                        disabled=True
+                    )
+            
+            st.subheader("Batch Schedule")
+            
+            schedule_options = {
+                "Midnight (00:00)": "0 0 * * *",
+                "1:00 AM": "0 1 * * *",
+                "2:00 AM": "0 2 * * *",
+                "3:00 AM": "0 3 * * *",
+                "4:00 AM": "0 4 * * *",
+                "5:00 AM": "0 5 * * *",
+                "6:00 AM": "0 6 * * *"
+            }
+            
+            current_schedule_name = [k for k, v in schedule_options.items() if v == batch_schedule]
+            default_schedule = current_schedule_name[0] if current_schedule_name else "Midnight (00:00)"
+            
+            selected_schedule_name = st.selectbox(
+                "Nightly batch start time",
+                list(schedule_options.keys()),
+                index=list(schedule_options.keys()).index(default_schedule),
+                help="When the nightly batch job runs to process delta records"
             )
-        
-        st.subheader("Batch schedule")
-        st.caption(f"Current schedule: **{batch_schedule}** (cron format)")
-        
-        schedule_options = {
-            "Midnight (00:00)": "0 0 * * *",
-            "1:00 AM": "0 1 * * *",
-            "2:00 AM": "0 2 * * *",
-            "3:00 AM": "0 3 * * *",
-            "4:00 AM": "0 4 * * *",
-            "5:00 AM": "0 5 * * *",
-            "6:00 AM": "0 6 * * *"
-        }
-        
-        current_schedule_name = [k for k, v in schedule_options.items() if v == batch_schedule]
-        default_schedule = current_schedule_name[0] if current_schedule_name else "Midnight (00:00)"
-        
-        selected_schedule_name = st.selectbox(
-            "Nightly batch start time",
-            list(schedule_options.keys()),
-            index=list(schedule_options.keys()).index(default_schedule),
-            help="When the nightly batch job runs to process delta records"
-        )
-        selected_schedule = schedule_options[selected_schedule_name]
-        
-        st.info("**Delta processing:** The nightly batch only processes records that have changed since the last successful run.", icon=":material/info:")
-        
-        st.subheader("DRI rules per deficit")
-        st.caption("Select which rule version to use for each deficit during batch processing.")
-        
-        deficit_versions = execute_query_df("""
-            SELECT DEFICIT_ID, DEFICIT_NAME, VERSION_NUMBER, IS_CURRENT_VERSION
-            FROM AGEDCARE.AGEDCARE.DRI_RULES
-            ORDER BY DEFICIT_ID, CREATED_TIMESTAMP DESC
-        """, session)
-        
-        if deficit_versions is not None and len(deficit_versions) > 0:
-            try:
-                current_deficits = deficit_versions[deficit_versions['IS_CURRENT_VERSION'] == True][['DEFICIT_ID', 'DEFICIT_NAME', 'VERSION_NUMBER']].copy()
-                current_deficits.columns = ['Deficit ID', 'Deficit Name', 'Current Version']
-                st.dataframe(current_deficits, use_container_width=True, hide_index=True)
-            except Exception as e:
-                st.error(f"Error displaying deficit versions: {e}")
-        
-        st.subheader("Adaptive token sizing")
-        st.caption("Threshold for standard vs large token mode. See 'How to use this page' for details.")
-        
-        current_threshold = st.session_state.get('context_threshold', db_threshold)
-        
-        new_threshold = st.number_input(
-            "Context threshold (characters)",
-            min_value=2000,
-            max_value=20000,
-            value=current_threshold,
-            step=500,
-            help="Residents with context below this threshold use standard mode (faster). Above uses large mode (slower but complete)."
-        )
-        
-        st.markdown("---")
-        if st.button("Save for production", type="primary", key="save_all_prod", icon=":material/save:", use_container_width=True):
-            try:
-                escaped_prompt = prompt_text_display.replace("'", "''").replace("\\", "\\\\") if 'prompt_text_display' in dir() else ''
-                prompt_ver = selected_prompt_version if 'selected_prompt_version' in dir() else prod_prompt_version
-                execute_query(f"""
-                    UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
-                    SET CONFIG_JSON = OBJECT_INSERT(
-                        OBJECT_INSERT(
-                            CONFIG_JSON, 
-                            'production_settings', 
-                            OBJECT_CONSTRUCT(
-                                'model', '{selected_prod_model}',
-                                'prompt_text', '{escaped_prompt}',
-                                'prompt_version', '{prompt_ver}',
-                                'batch_schedule', '{selected_schedule}'
+            selected_schedule = schedule_options[selected_schedule_name]
+            
+            st.subheader("Adaptive Token Sizing")
+            st.caption("Threshold for standard vs large token mode.")
+            
+            new_threshold = st.number_input(
+                "Context threshold (characters)",
+                min_value=2000,
+                max_value=20000,
+                value=db_threshold,
+                step=500,
+                help="Residents with context below this threshold use standard mode (faster). Above uses large mode (slower but complete)."
+            )
+            
+            st.markdown("---")
+            if st.button("Save All Client Settings", type="primary", key="save_all_client", icon=":material/save:", use_container_width=True):
+                try:
+                    escaped_prompt = prompt_text_display.replace("'", "''").replace("\\", "\\\\") if 'prompt_text_display' in dir() else ''
+                    prompt_ver = selected_prompt_version if 'selected_prompt_version' in dir() else prod_prompt_version
+                    execute_query(f"""
+                        UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
+                        SET CONFIG_JSON = OBJECT_INSERT(
+                            OBJECT_INSERT(
+                                CONFIG_JSON, 
+                                'production_settings', 
+                                OBJECT_CONSTRUCT(
+                                    'model', '{selected_prod_model}',
+                                    'prompt_text', '{escaped_prompt}',
+                                    'prompt_version', '{prompt_ver}',
+                                    'batch_schedule', '{selected_schedule}'
+                                ),
+                                TRUE
                             ),
+                            'client_settings', 
+                            OBJECT_INSERT(COALESCE(CONFIG_JSON:client_settings, OBJECT_CONSTRUCT()), 'context_threshold', {new_threshold}, TRUE),
                             TRUE
                         ),
-                        'client_settings', 
-                        OBJECT_INSERT(COALESCE(CONFIG_JSON:client_settings, OBJECT_CONSTRUCT()), 'context_threshold', {new_threshold}, TRUE),
-                        TRUE
-                    ),
-                    MODIFIED_BY = CURRENT_USER(),
-                    MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
-                    WHERE CONFIG_ID = '{selected_config_id}'
-                """, session)
-                st.session_state['context_threshold'] = new_threshold
-                st.success(f"All production settings saved successfully!", icon=":material/check_circle:")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to save: {e}", icon=":material/error:")
+                        MODIFIED_BY = CURRENT_USER(),
+                        MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
+                        WHERE CONFIG_ID = '{selected_config_id}'
+                    """, session)
+                    
+                    updated_assignments = st.session_state.get('updated_rule_assignments', {})
+                    for deficit_id, rule_version in updated_assignments.items():
+                        execute_query(f"""
+                            MERGE INTO AGEDCARE.AGEDCARE.DRI_CLIENT_RULE_ASSIGNMENTS t
+                            USING (SELECT '{selected_client_key}' as CLIENT_SYSTEM_KEY, '{deficit_id}' as DEFICIT_ID, '{rule_version}' as RULE_VERSION) s
+                            ON t.CLIENT_SYSTEM_KEY = s.CLIENT_SYSTEM_KEY AND t.DEFICIT_ID = s.DEFICIT_ID
+                            WHEN MATCHED THEN UPDATE SET RULE_VERSION = s.RULE_VERSION, MODIFIED_BY = CURRENT_USER(), MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()
+                            WHEN NOT MATCHED THEN INSERT (CLIENT_SYSTEM_KEY, DEFICIT_ID, RULE_VERSION, CREATED_BY) VALUES (s.CLIENT_SYSTEM_KEY, s.DEFICIT_ID, s.RULE_VERSION, CURRENT_USER())
+                        """, session)
+                    
+                    st.success(f"All settings saved for {selected_client_display}!", icon=":material/check_circle:")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to save: {e}", icon=":material/error:")
+        else:
+            st.error("No clients found in configuration table", icon=":material/error:")
 
 else:
     st.error("Failed to connect to Snowflake", icon=":material/error:")
