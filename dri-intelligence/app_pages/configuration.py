@@ -52,10 +52,12 @@ The DRI system uses four **detection modes** to identify deficit indicators:
         st.caption("Global deficit detection rules with version control. Editing creates a new version - select which versions to use per client in Client Settings.")
         
         rules_data = execute_query_df("""
-            SELECT DISTINCT DEFICIT_ID, DEFICIT_NAME, DOMAIN, 
+            SELECT DEFICIT_ID, 
+                   MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN DEFICIT_NAME END) as DEFICIT_NAME,
+                   MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN DOMAIN END) as DOMAIN,
                    MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN VERSION_NUMBER END) as LATEST_VERSION
             FROM AGEDCARE.AGEDCARE.DRI_RULES
-            GROUP BY DEFICIT_ID, DEFICIT_NAME, DOMAIN
+            GROUP BY DEFICIT_ID
             ORDER BY DEFICIT_ID
         """, session)
         
@@ -529,8 +531,11 @@ The DRI system uses four **detection modes** to identify deficit indicators:
             st.caption("Select which version of each deficit rule to use for this client's batch processing.")
             
             all_deficit_versions = execute_query_df("""
-                SELECT DEFICIT_ID, DEFICIT_NAME, VERSION_NUMBER, VERSION_DESCRIPTION, CREATED_TIMESTAMP
+                SELECT DEFICIT_ID, 
+                       MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN DEFICIT_NAME END) as DEFICIT_NAME,
+                       VERSION_NUMBER, VERSION_DESCRIPTION, CREATED_TIMESTAMP
                 FROM AGEDCARE.AGEDCARE.DRI_RULES
+                GROUP BY DEFICIT_ID, VERSION_NUMBER, VERSION_DESCRIPTION, CREATED_TIMESTAMP
                 ORDER BY DEFICIT_ID, CREATED_TIMESTAMP DESC
             """, session)
             
@@ -546,7 +551,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                 assignment_dict = {}
             
             if all_deficit_versions is not None and len(all_deficit_versions) > 0:
-                unique_deficits = all_deficit_versions[['DEFICIT_ID', 'DEFICIT_NAME']].drop_duplicates()
+                unique_deficits = all_deficit_versions[['DEFICIT_ID', 'DEFICIT_NAME']].drop_duplicates(subset=['DEFICIT_ID'])
                 
                 updated_assignments = {}
                 
