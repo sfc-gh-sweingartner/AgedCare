@@ -14,6 +14,7 @@ page = st.navigation([
     st.Page("app_pages/prompt_engineering.py", title="Prompt engineering", icon=":material/science:"),
     st.Page("app_pages/batch_testing.py", title="Batch testing", icon=":material/labs:"),
     st.Page("app_pages/review_queue.py", title="Review queue", icon=":material/checklist:"),
+    st.Page("app_pages/resident_history.py", title="Resident history", icon=":material/person_search:"),
     st.Page("app_pages/audit_results.py", title="Audit results", icon=":material/analytics:"),
     st.Page("app_pages/feedback_loop.py", title="Feedback loop", icon=":material/feedback:"),
     st.Page("app_pages/configuration.py", title="Configuration", icon=":material/settings:"),
@@ -29,6 +30,8 @@ if page.title == "Dashboard":
         st.markdown("""
 ### What is DRI Intelligence?
 This application uses AI (Claude LLM) to detect health indicators in aged care resident records, replacing the traditional regex/keyword matching approach that has a ~10% false positive rate. The goal is to achieve <1% false positives.
+
+**V0.7 Update**: Now using 32 deficits (D001-D032), with cross-deficit logic for D018 Dementia / D019 Cognition.
 
 ### Typical Workflow
 1. **Configure** your client settings and production prompt in the **Configuration** page
@@ -75,7 +78,7 @@ This application uses AI (Claude LLM) to detect health indicators in aged care r
             with cols[1]:
                 st.metric("Pending reviews", metrics['pending'])
             with cols[2]:
-                st.metric("DRI indicators", metrics['indicators'])
+                st.metric("DRI indicators (V0.7)", metrics['indicators'])
             with cols[3]:
                 st.metric("Analyses run", metrics['analyses'])
         

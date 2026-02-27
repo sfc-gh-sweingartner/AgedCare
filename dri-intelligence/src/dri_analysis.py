@@ -197,7 +197,7 @@ def calculate_dri_score(session, resident_id: int):
     
     if result:
         active_deficits = result[0]['ACTIVE_DEFICITS']
-        dri_score = active_deficits / 33.0
+        dri_score = active_deficits / 32.0  # V0.7: 32 deficits
         
         if dri_score <= 0.2:
             severity_band = 'Low'

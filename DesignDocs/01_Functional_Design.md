@@ -8,6 +8,8 @@ This document defines the functional design for replacing Telstra Health's regex
 
 **Solution**: Context-aware LLM analysis for indicator detection only, with human-in-the-loop approval, prompt engineering UI, and RAG-enhanced context. DRI score calculation remains a standard deterministic formula for compliance and auditability.
 
+**V0.7 Update (28 Jan 2026)**: Clinical rules specification updated with 32 deficits (D001-D032), new overarching rules for new admissions (7-day delay), re-admission gap logic, and cross-deficit dependencies (D019 Cognition depends on D018 Dementia status).
+
 ---
 
 ## 1. Solution Overview
@@ -108,7 +110,7 @@ This document defines the functional design for replacing Telstra Health's regex
 | RAG Knowledge Base | Provide DRI context to LLM | Cortex Search + Snowflake tables |
 | Client Config Layer | Handle per-client assessment form mappings | JSON config tables |
 | LLM Analysis Engine | Intelligent **indicator detection** (not DRI calculation) | Cortex Complete (Claude 4.5) |
-| DRI Calculator | Standard formula: active_deficits / 33 | SQL/Python script |
+| DRI Calculator | Standard formula: active_deficits / 32 (V0.7) | SQL/Python script |
 | Prompt Engineering UI | Business user prompt tuning | Streamlit on SPCS |
 | Review Queue | Human approval workflow | Snowflake tables + Streamlit |
 | Batch Processor | Scheduled analysis runs | Snowflake Notebook/Task |
@@ -172,9 +174,10 @@ The solution reads from **six** source tables (existing ETL populates these):
 
 **Step 5: LLM Analysis (Indicator Detection Only)**
 - Single comprehensive prompt per resident
-- Returns structured JSON with all 33 indicators assessed
+- Returns structured JSON with all 32 indicators assessed (V0.7)
 - Includes confidence scores, evidence, and temporal status
 - **Does NOT calculate DRI score** (this is done by standard script)
+- **Sequential processing**: D018 Dementia evaluated before D019 Cognition (cross-deficit dependency)
 
 **Step 6: Result Storage**
 - Raw LLM output stored for audit (DRI_LLM_ANALYSIS)
@@ -184,9 +187,27 @@ The solution reads from **six** source tables (existing ETL populates these):
 **Step 7: DRI Score Calculation (Standard Script)**
 - Runs after human approval updates DRI_DEFICIT_STATUS
 - Counts ACTIVE deficits per resident
-- Calculates: `dri_score = active_deficits / 33`
+- Calculates: `dri_score = active_deficits / 32` (V0.7: 32 deficits)
 - Looks up severity_band from DRI_SEVERITY table
 - Updates DRI_DEFICIT_SUMMARY for Power BI
+
+### 2.2.1 New Admission Processing (V0.7)
+
+**7-Day Dashboard Delay Rule:**
+- New residents are processed from day 1 but NOT displayed on dashboard until 7 days active
+- UI displays: "Deteriorating Resident Index Unavailable: Insufficient data (new admission)"
+- Supporting tooltip: "This resident has been in the facility for fewer than 7 days. Required assessment and clinical data are still being collected and are currently insufficient to generate a Deteriorating Resident Index (DRI) score."
+
+**Re-admission Gap Logic:**
+- If resident is discharged and re-admitted with gap ≤7 calendar days: continue DRI score from previous residency
+- If gap >7 calendar days: treat as new admission with 7-day display delay
+
+**Resident Leave Status Display:**
+- When resident is on leave, display appropriate status instead of DRI score:
+  - "No data – New admission"
+  - "No data – Hospitalisation"
+  - "No data – Social leave"
+  - "No data - Emergency leave"
 
 ### 2.3 Client-Specific Configuration
 
@@ -285,7 +306,7 @@ Some deficits have expiry or persistence windows. The LLM output includes tempor
 
 ### 2.6 DRI Indicator Analysis (Claude Output)
 
-The LLM assesses all 33 DRI deficit indicators in a single call, returning **detection results only**:
+The LLM assesses all 32 DRI deficit indicators (V0.7) in a single call, returning **detection results only**:
 
 ```json
 {
@@ -381,17 +402,33 @@ WITH active_counts AS (
 SELECT 
     a.resident_id,
     CURRENT_TIMESTAMP() as load_timestamp,
-    a.active_deficits / 33.0 as dri_score,
+    a.active_deficits / 32.0 as dri_score, -- V0.7: 32 deficits
     s.DRI_SEVERITY_NAME as severity_band
 FROM active_counts a
 LEFT JOIN DRI_SEVERITY s 
-    ON a.active_deficits / 33.0 BETWEEN s.DRI_SEVERITY_MINIMUM_VALUE AND s.DRI_SEVERITY_MAXIMUM_VALUE;
+    ON a.active_deficits / 32.0 BETWEEN s.DRI_SEVERITY_MINIMUM_VALUE AND s.DRI_SEVERITY_MAXIMUM_VALUE;
 ```
 
 This formula:
-- Is **identical** to the existing production calculation
+- Is **identical** to the existing production calculation (updated for V0.7: 32 deficits)
 - Is **auditable** and **compliant** with industry standards
 - Can be **changed independently** of Claude prompts
+
+### 2.7.1 Negation Logic (V0.7)
+
+The LLM applies negation logic to exclude false positives. The following patterns indicate a condition should NOT be flagged:
+
+**Negative Lookbehind Phrases** (condition preceded by):
+- no, no symptoms of, no symptom of
+- nil sign of, nil signs of
+- does not require, doesn't have
+- neg, -ve (negative)
+- denies, rule out, no longer requires
+
+**Negative Lookahead Phrases** (condition followed by):
+- absent, neg, NAD (no abnormalities detected)
+
+**Implementation**: Regex pre-filter + LLM confirmation for defense-in-depth approach.
 
 ### 2.8 Explainability & Traceability
 
@@ -1031,9 +1068,16 @@ This document has been updated based on feedback from Telstra Health's data engi
 
 ---
 
-## Appendix B: DRI Business Rules Specification (33 Deficits)
+## Appendix B: DRI Business Rules Specification (V0.7 - 32 Deficits)
 
-This section documents the complete business rules for all 33 DRI deficit indicators as specified in the requirements document.
+This section documents the complete business rules for all 32 DRI deficit indicators as specified in V0.7 Clinical Rules (28 Jan 2026).
+
+**Key V0.7 Changes:**
+- **32 deficits** (D001-D032), reduced from 33
+- D013 Ulcers combined (GI + Wound under one ID)
+- D018 now Dementia, D019 now Cognition (swapped order for cross-deficit dependency)
+- D019 Cognition has complex sub-rules with CAM/Delirium Screen depending on Dementia status
+- D026 Insomnia uses 3 occurrences in 90 days (DSM-5 criteria: 3 nights/week for 3 months)
 
 ### B.1 Deficit Types
 
@@ -1094,43 +1138,42 @@ Each deficit rule now includes additional fields for LLM optimization:
 | `exclusion_filter` | Exclude specific locations/values | observation_location NOT IN ('foot', 'heel', 'toe') |
 | `aggregation` | Group and count operations | COUNT(*) GROUP BY resident_id |
 
-### B.4 Complete Deficit Specification
+### B.4 Complete Deficit Specification (V0.7 - 32 Deficits)
 
-| Deficit # | Domain | Deficit Name | Type | Expiry Days | Lookback | Rule Type | Threshold | Key Notes |
-|-----------|--------|--------------|------|-------------|----------|-----------|-----------|----------|
-| D001 | Chronic Diseases | Respiratory | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D002 | Chronic Diseases | Cardiac | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D003 | Chronic Diseases | Neurological | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D004 | Chronic Diseases | Renal | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D005 | Chronic Diseases | Cancer | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D006 | Chronic Diseases | Peripheral Vascular Disease | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D007 | Chronic Diseases | Thyroid | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D008 | Blood-specific | Diabetes | PERSISTENT | 0 | All | keyword_search + specific_value | 1 | Includes dropdown values |
-| D009 | Blood-specific | Blood Pressure | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D010 | Bone-specific | Osteoporosis | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D011 | Bone-specific | Arthritis | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D012 | Geriatric Syndrome | Falls | FLUCTUATING | 1 | 365 days | specific_value | 1 | 24hr expiry, 12-month lookback |
-| D013 | Geriatric Syndrome | Ulcers GI | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D014 | Geriatric Syndrome | Ulcers Wound | FLUCTUATING | 1 | 90 days | keyword_search | 1 | Exclude foot locations, status-based |
-| D015 | Geriatric Syndrome | Polypharmacy | FLUCTUATING | 1 | 1 day | aggregation | 5 | Count meds ≥5, exclude creams/drops |
-| D016 | Geriatric Syndrome | Dysphagia | PERSISTENT | 0 | All | keyword_search + specific_value | 1 | Multiple sources |
-| D017 | Geriatric Syndrome | Pain | FLUCTUATING | 1 | 7 days | specific_value | varies | Pain Chart ≥1, PainChek ≥7 |
-| D018 | Geriatric Syndrome | Fracture | PERSISTENT | 0 | All | keyword_search + specific_value | 1 | Exclude suspected/no fracture |
-| D019 | Cognition | Cognition | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D020 | Cognition | Dementia | PERSISTENT | 0 | All | keyword_search | 1 | Never expires |
-| D021 | Nutrition | Weight Loss | FLUCTUATING | 90 | 90 days | aggregation + specific_value | 5% | MNA or 5% weight loss over quarter |
-| D022 | Activities of Daily Life | ADL | FLUCTUATING | 3 | 72 hrs | specific_value | 1 | Hygiene/Dressing/Toileting |
-| D023 | Activities of Daily Life | Mobility | FLUCTUATING | 1 | 7 days | specific_value | 1 | Transfer/mobility aids required |
-| D024 | Elimination | Incontinence | FLUCTUATING | 10 | 10 days | aggregation | 50% | 50% incontinent over 10 days OR urinary chart |
-| D025 | Emotional | Depression | FLUCTUATING | 90 | 90 days | keyword_search + specific_value | varies | GDS ≥6, Cornell ≥11, Progress Notes ≥2/month |
-| D026 | Emotional | Anxiety | FLUCTUATING | 90 | 90 days | keyword_search + specific_value | varies | 1 in assessments, 2 in progress notes |
-| D027 | Emotional | Insomnia | FLUCTUATING | 90 | 90 days | keyword_search + specific_value | varies | 1 in assessments, 3/18 in progress notes |
-| D028 | Communication | Vision | PERSISTENT | 0 | All | keyword_search + specific_value | 1 | Never expires |
-| D029 | Communication | Hearing | PERSISTENT | 0 | All | keyword_search + specific_value | 1 | Never expires |
-| D030 | Other symptoms | Dyspnoea | FLUCTUATING | 60 | 60 days | keyword_search | varies | 1 in assessments, 3 in progress notes |
-| D031 | Other symptoms | Anaemia | FLUCTUATING | 90 | 90 days | keyword_search | varies | 1 in assessments, 1 in progress notes |
-| D032 | Other symptoms | Dizziness | FLUCTUATING | 60 | 60 days | keyword_search | varies | Exclude negated statements |
-| D033 | Other symptoms | Foot/Feet | PERSISTENT | 0 | All | keyword_search + specific_value | 1 | Never expires |
+| Deficit # | Domain | Deficit Name | Type | Expiry Days | Lookback | Key Notes |
+|-----------|--------|--------------|------|-------------|----------|----------|
+| D001 | Chronic Diseases | Respiratory | PERSISTENT | 0 | All | Never expires |
+| D002 | Chronic Diseases | Cardiac | PERSISTENT | 0 | All | Never expires |
+| D003 | Chronic Diseases | Neurological | PERSISTENT | 0 | All | Never expires |
+| D004 | Chronic Diseases | Renal | PERSISTENT | 0 | All | Never expires |
+| D005 | Chronic Diseases | Cancer | PERSISTENT | 0 | All | Never expires |
+| D006 | Chronic Diseases | Peripheral Vascular Disease | PERSISTENT | 0 | All | Never expires |
+| D007 | Chronic Diseases | Thyroid | PERSISTENT | 0 | All | Never expires |
+| D008 | Blood-specific | Diabetes | PERSISTENT | 0 | All | Includes dropdown values |
+| D009 | Blood-specific | Blood Pressure | PERSISTENT | 0 | All | Never expires |
+| D010 | Bone-specific | Osteoporosis | PERSISTENT | 0 | All | Never expires |
+| D011 | Bone-specific | Arthritis | PERSISTENT | 0 | All | Never expires |
+| D012 | Geriatric Syndrome | Falls | FLUCTUATING | 1 | 365 days | 24hr expiry, 12-month lookback |
+| D013 | Geriatric Syndrome | Ulcers | MIXED | 1/0 | 90 days/All | GI=PERSISTENT, Wound=FLUCTUATING (exclude foot locations) |
+| D014 | Geriatric Syndrome | Polypharmacy | FLUCTUATING | 1 | 1 day | Count meds ≥5, exclude creams/drops |
+| D015 | Geriatric Syndrome | Dysphagia | PERSISTENT | 0 | All | Multiple sources |
+| D016 | Geriatric Syndrome | Pain | FLUCTUATING | 1 | 7 days | Pain Chart ≥1, PainChek ≥7 |
+| D017 | Geriatric Syndrome | Fracture | PERSISTENT | 0 | All | Exclude suspected/no fracture |
+| D018 | Cognition | Dementia | PERSISTENT | 0 | All | **Process BEFORE D019** |
+| D019 | Cognition | Cognition | MIXED | 24h/90d | All | **Cross-deficit**: CAM triggers if Dementia NOT present, Delirium triggers if Dementia IS present |
+| D020 | Nutrition | Weight Loss | FLUCTUATING | 90 | 90 days | MNA or 5% weight loss over quarter |
+| D021 | Activities of Daily Life | ADL | FLUCTUATING | 3 | 72 hrs | Hygiene/Dressing/Toileting |
+| D022 | Activities of Daily Life | Mobility | FLUCTUATING | 7 | 7 days | Transfer/mobility aids required |
+| D023 | Elimination | Incontinence | FLUCTUATING | 10 | 10 days | 50% incontinent over 10 days OR urinary chart |
+| D024 | Emotional | Depression | FLUCTUATING | 90 | 90 days | GDS ≥6, Cornell ≥11, Progress Notes ≥2/month |
+| D025 | Emotional | Anxiety | FLUCTUATING | 90 | 90 days | 1 in assessments, 2 in progress notes |
+| D026 | Emotional | Insomnia | FLUCTUATING | 90 | 90 days | **DSM-5**: 3 occurrences in 90 days (3 nights/week) |
+| D027 | Communication | Vision | PERSISTENT | 0 | All | Never expires |
+| D028 | Communication | Hearing | PERSISTENT | 0 | All | Never expires |
+| D029 | Other symptoms | Dyspnoea | FLUCTUATING | 60 | 60 days | 1 in assessments, 3 in progress notes |
+| D030 | Other symptoms | Anaemia and Haematinic Deficiency | FLUCTUATING | 90 | 90 days | 1 in assessments, 1 in progress notes |
+| D031 | Other symptoms | Dizziness | FLUCTUATING | 60 | 60 days | Exclude negated statements |
+| D032 | Other symptoms | Foot/Feet | PERSISTENT | 0 | All | Never expires |
 
 ### B.5 Complex Rule Examples
 
@@ -1276,7 +1319,7 @@ All historical versions are retained for audit purposes.
 
 ---
 
-*Document Version: 2.3*  
+*Document Version: 2.4*  
 *Created: 2025-01-27*  
-*Updated: 2026-02-24*  
+*Updated: 2026-02-26*  
 *Status: Approved*
