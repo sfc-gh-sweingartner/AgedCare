@@ -28,3 +28,4 @@ entities:
       - app_pages/configuration.py
       - app_pages/comparison.py
       - app_pages/batch_testing.py
+      - app_pages/resident_history.py
