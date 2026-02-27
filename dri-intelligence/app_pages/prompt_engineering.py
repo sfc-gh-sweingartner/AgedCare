@@ -113,12 +113,11 @@ if session:
             selected_client = "DEMO_CLIENT_871"
         
         model_options = [
-            'claude-haiku-4-6',
+            'claude-haiku-4-5',
             'claude-opus-4-6',
             'claude-sonnet-4-6',
             'claude-sonnet-4-5',
             'claude-opus-4-5',
-            'claude-haiku-4-5',
             'claude-3-5-sonnet',
             'claude-3-7-sonnet',
             'mistral-large2',
