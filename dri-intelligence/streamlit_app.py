@@ -19,6 +19,7 @@ page = st.navigation([
     st.Page("app_pages/feedback_loop.py", title="Feedback loop", icon=":material/feedback:"),
     st.Page("app_pages/configuration.py", title="Configuration", icon=":material/settings:"),
     st.Page("app_pages/comparison.py", title="Claude vs Regex", icon=":material/compare_arrows:"),
+    st.Page("app_pages/testing_tools.py", title="Testing tools", icon=":material/build:"),
 ], position="sidebar")
 
 st.title(f"{page.icon} {page.title}")

@@ -29,3 +29,4 @@ entities:
       - app_pages/comparison.py
       - app_pages/batch_testing.py
       - app_pages/resident_history.py
+      - app_pages/testing_tools.py
