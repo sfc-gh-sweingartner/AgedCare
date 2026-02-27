@@ -176,12 +176,14 @@ if session:
     
     with cfg_col2:
         model_options = [
+            'claude-haiku-4-6',
+            'claude-opus-4-6',
+            'claude-sonnet-4-6',
             'claude-sonnet-4-5',
             'claude-opus-4-5',
             'claude-haiku-4-5',
             'claude-3-5-sonnet',
             'claude-3-7-sonnet',
-            'claude-4-sonnet',
             'mistral-large2',
             'llama3.1-70b'
         ]

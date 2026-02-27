@@ -580,6 +580,8 @@ The DRI system uses four **detection modes** to identify deficit indicators:
             st.subheader("Production Model")
             
             model_options = [
+                'claude-haiku-4-6',
+                'claude-opus-4-6',
                 'claude-sonnet-4-6',
                 'claude-sonnet-4-5',
                 'claude-opus-4-5',
