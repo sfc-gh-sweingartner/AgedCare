@@ -1229,8 +1229,8 @@ The following requirements from the DRI specification are **documented but not y
 | 1 | **Audit Tables** | Rule applications, scoring decisions, and explainability metadata tracking | 🔴 Pending |
 | 2 | **Daily Delta Processing** | Incremental updates with temporal logic (flag expiry, re-trigger) | 🔴 Pending |
 | 3 | **Version Controlled Config** | Client-specific rules updates without code changes | 🟡 Partial (prompt versions exist) |
-| 4 | **Data Lineage Tracking** | Full traceability from source to output | 🔴 Pending |
-| 5 | **Orchestration Framework** | Scheduled tasks for daily processing | 🔴 Pending |
+| 4 | **Data Lineage Tracking** | Full traceability from source to output | 🟡 Partial (occurrence tracking implemented) |
+| 5 | **Orchestration Framework** | Scheduled tasks for daily processing | ✅ Implemented (DRI_EVENT_PROCESSOR, DRI_TIME_PROCESSOR) |
 
 ---
 
@@ -1316,10 +1316,11 @@ All historical versions are retained for audit purposes.
 | 2.1 | 2026-02-24 | **Unified DRI_RULES Table**: Replaced multiple tables with unified DRI_RULES. Added DRI_CLINICAL_DECISIONS. Per-deficit versioning (D001-0001 format). |
 | 2.2 | 2026-02-24 | **Enhanced Feedback Loop v2.2**: Added time period filter (7/30/90 days), RAG indicator context for AI analysis, increased query limits (500/200/150), full LLM context in rejections (reasoning, confidence), location badges for AI suggestions (📝 Prompt vs 📚 RAG Definitions). |
 | 2.3 | 2026-02-24 | **LLM-Optimized Detection Modes**: Added 4 new detection modes (clinical_reasoning, structured_data, threshold_aggregation, keyword_guidance) to replace regex-based approach. Added DETECTION_MODE, CLINICAL_GUIDANCE, INCLUSION_TERMS, EXCLUSION_PATTERNS, REGULATORY_REFERENCE columns to DRI_RULES. All 33 deficits updated with LLM-optimized settings. Prompt v0009 created with clinical reasoning approach. Legacy rule types retained with "(legacy)" suffix. |
+| 2.4 | 2026-03-02 | **Temporal Processing System**: Added DRI_INDICATOR_OCCURRENCES table for threshold counting, DRI_PROCESSOR_RUNS for audit trail. Created DRI_EVENT_PROCESSOR (runs after human approval) and DRI_TIME_PROCESSOR (runs daily). Updated Configuration page with Time Processor controls. Review Queue calls Event Processor on confirm/reject. Resident History enhanced with Occurrence Timeline and DRI Trend tabs. |
 
 ---
 
-*Document Version: 2.4*  
+*Document Version: 2.5*  
 *Created: 2025-01-27*  
-*Updated: 2026-02-26*  
+*Updated: 2026-03-02*  
 *Status: Approved*

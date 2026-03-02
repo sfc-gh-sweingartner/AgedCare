@@ -22,6 +22,17 @@ if session:
 ### Purpose
 This is the **clinical decision workflow** for reviewing DRI indicators. The system now remembers clinical decisions at the resident + indicator level with time-bound validity.
 
+### What Happens Behind the Scenes
+When you **Confirm** an indicator:
+1. **Event Processor** logs the occurrence in `DRI_INDICATOR_OCCURRENCES`
+2. Counts occurrences within the rule's lookback window (e.g., 90 days)
+3. If threshold met (e.g., 2 of 2), activates the indicator
+4. If not met, you'll see feedback like "Occurrence logged (1 of 2 needed)"
+
+When you **Reject** an indicator:
+- Records rejection for future prompt improvement analysis
+- Indicator is NOT activated regardless of occurrence count
+
 ### Review Types
 
 | Type | Description | Actions |
@@ -32,14 +43,20 @@ This is the **clinical decision workflow** for reviewing DRI indicators. The sys
 | ⏰ **RENEWAL REQUIRED** | Confirmed indicator approaching expiry | RENEW or LET EXPIRE |
 
 ### Clinical Decision Types
-- **CONFIRM**: Indicator is clinically accurate (permanent or time-bound)
+- **CONFIRM**: Indicator is clinically accurate - logs occurrence and checks threshold
 - **REJECT**: False positive - suppress for specified duration (default 90 days)
+
+### Threshold-Based Rules (V0.7)
+Some indicators require multiple occurrences before activation:
+- **Falls (D012)**: 2 occurrences in 365 days → 24hr expiry
+- **Insomnia (D026)**: 3 occurrences in 90 days (DSM-5 criteria)
+- Most others: 1 occurrence activates immediately
 
 ### Workflow
 1. Filter by review type to focus on new or renewal items
 2. Review evidence and AI reasoning
 3. Make clinical decision with optional duration override
-4. Decisions are recorded and remembered for future detections
+4. System shows feedback: "Indicator activated" or "Occurrence logged (X of Y needed)"
         """)
 
     st.caption("Clinical review workflow with temporal memory for indicator decisions")
@@ -263,27 +280,43 @@ This is the **clinical decision workflow** for reviewing DRI indicators. The sys
                                 elif review_type == "NEW_INDICATOR":
                                     col_confirm, col_reject = st.columns(2)
                                     
+                                    evidence_list = ind.get('evidence', [])
+                                    first_evidence = evidence_list[0] if evidence_list else {}
+                                    evidence_text = ind.get('reasoning', 'Approved via review queue')
+                                    source_id = first_evidence.get('source_id', '')
+                                    source_table = first_evidence.get('source_table', '')
+                                    
                                     with col_confirm:
                                         if st.button(f"✅ Confirm", key=f"confirm_{row['QUEUE_ID']}_{ind_id}", use_container_width=True, type="primary"):
-                                            expiry_date = "NULL" if deficit_type == 'PERSISTENT' else f"DATEADD(day, {default_expiry}, CURRENT_DATE())"
-                                            review_req = "FALSE" if deficit_type == 'PERSISTENT' else "TRUE"
-                                            reminder_days = rule_info.get('RENEWAL_REMINDER_DAYS', 7) if rule_info else 7
-                                            
-                                            execute_query(f"""
-                                                INSERT INTO AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS (
-                                                    RESIDENT_ID, CLIENT_SYSTEM_KEY, DEFICIT_ID, DEFICIT_NAME,
-                                                    DECISION_TYPE, DECISION_REASON, DEFICIT_TYPE,
-                                                    DEFAULT_EXPIRY_DAYS, EXPIRY_DATE, REVIEW_REQUIRED,
-                                                    RENEWAL_REMINDER_DAYS, DECIDED_BY
-                                                ) VALUES (
-                                                    {row['RESIDENT_ID']}, '{row['CLIENT_SYSTEM_KEY']}', '{ind_id}', '{ind_name.replace("'", "''")}',
-                                                    'CONFIRMED', 'Approved via review queue', '{deficit_type}',
-                                                    {default_expiry}, {expiry_date}, {review_req},
-                                                    {reminder_days}, CURRENT_USER()
-                                                )
-                                            """, session)
-                                            st.success(f"Confirmed {ind_id}")
-                                            st.rerun()
+                                            try:
+                                                result = execute_query(f"""
+                                                    CALL AGEDCARE.AGEDCARE.DRI_EVENT_PROCESSOR(
+                                                        {row['RESIDENT_ID']},
+                                                        '{row['CLIENT_SYSTEM_KEY']}',
+                                                        '{ind_id}',
+                                                        '{ind_name.replace("'", "''")}',
+                                                        'CONFIRMED',
+                                                        CURRENT_USER(),
+                                                        '{evidence_text.replace("'", "''")}',
+                                                        '{source_id}',
+                                                        '{source_table}',
+                                                        '{row['ANALYSIS_ID']}',
+                                                        '{row['QUEUE_ID']}'
+                                                    )
+                                                """, session)
+                                                
+                                                if result:
+                                                    import json
+                                                    result_data = result[0][0] if result[0] else {}
+                                                    if isinstance(result_data, str):
+                                                        result_data = json.loads(result_data)
+                                                    msg = result_data.get('message', 'Confirmed')
+                                                    st.success(f"{ind_id}: {msg}")
+                                                else:
+                                                    st.success(f"Confirmed {ind_id}")
+                                                st.rerun()
+                                            except Exception as e:
+                                                st.error(f"Failed to confirm: {e}")
                                     
                                     with col_reject:
                                         reject_key = f"reject_expand_{row['QUEUE_ID']}_{ind_id}"
@@ -294,7 +327,6 @@ This is the **clinical decision workflow** for reviewing DRI indicators. The sys
                                         if st.session_state.get(reject_key, False):
                                             with st.form(key=f"reject_form_{row['QUEUE_ID']}_{ind_id}"):
                                                 reason = st.text_input("Rejection reason", placeholder="Why is this a false positive?")
-                                                suppress_days = st.selectbox("Suppress for", [0, 7, 30, 90, 365], index=3, format_func=lambda x: "No suppression" if x == 0 else f"{x} days")
                                                 
                                                 col_cancel, col_submit = st.columns(2)
                                                 with col_cancel:
@@ -304,32 +336,32 @@ This is the **clinical decision workflow** for reviewing DRI indicators. The sys
                                                 with col_submit:
                                                     if st.form_submit_button("Submit Rejection", type="primary", use_container_width=True):
                                                         reason_escaped = reason.replace("'", "''") if reason else "False positive"
-                                                        execute_query(f"""
-                                                            INSERT INTO AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS (
-                                                                RESIDENT_ID, CLIENT_SYSTEM_KEY, DEFICIT_ID, DEFICIT_NAME,
-                                                                DECISION_TYPE, DECISION_REASON, DEFICIT_TYPE,
-                                                                DEFAULT_EXPIRY_DAYS, EXPIRY_DATE, REVIEW_REQUIRED,
-                                                                RENEWAL_REMINDER_DAYS, DECIDED_BY
-                                                            ) VALUES (
-                                                                {row['RESIDENT_ID']}, '{row['CLIENT_SYSTEM_KEY']}', '{ind_id}', '{ind_name.replace("'", "''")}',
-                                                                'REJECTED', '{reason_escaped}', '{deficit_type}',
-                                                                {suppress_days}, DATEADD(day, {suppress_days}, CURRENT_DATE()), FALSE,
-                                                                7, CURRENT_USER()
-                                                            )
-                                                        """, session)
-                                                        
-                                                        execute_query(f"""
-                                                            INSERT INTO AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS 
-                                                            (QUEUE_ID, INDICATOR_ID, INDICATOR_NAME, REJECTION_REASON, REJECTED_BY)
-                                                            VALUES ('{row['QUEUE_ID']}', '{ind_id}', '{ind_name.replace("'", "''")}', '{reason_escaped}', CURRENT_USER())
-                                                        """, session)
-                                                        
-                                                        st.session_state[reject_key] = False
-                                                        st.success(f"Rejected {ind_id} for {suppress_days} days")
-                                                        st.rerun()
+                                                        try:
+                                                            result = execute_query(f"""
+                                                                CALL AGEDCARE.AGEDCARE.DRI_EVENT_PROCESSOR(
+                                                                    {row['RESIDENT_ID']},
+                                                                    '{row['CLIENT_SYSTEM_KEY']}',
+                                                                    '{ind_id}',
+                                                                    '{ind_name.replace("'", "''")}',
+                                                                    'REJECTED',
+                                                                    CURRENT_USER(),
+                                                                    '{reason_escaped}',
+                                                                    '{source_id}',
+                                                                    '{source_table}',
+                                                                    '{row['ANALYSIS_ID']}',
+                                                                    '{row['QUEUE_ID']}'
+                                                                )
+                                                            """, session)
+                                                            
+                                                            st.session_state[reject_key] = False
+                                                            st.success(f"Rejected {ind_id} (suppressed for 90 days)")
+                                                            st.rerun()
+                                                        except Exception as e:
+                                                            st.error(f"Failed to reject: {e}")
                         
                         st.markdown("---")
                         if st.button("✅ Approve Remaining & Complete", key=f"complete_{row['QUEUE_ID']}", use_container_width=True, type="primary"):
+                            approved_count = 0
                             for ind_to_auto in indicators[:15]:
                                 ind_auto_id = ind_to_auto.get('deficit_id', '')
                                 ind_auto_name = ind_to_auto.get('deficit_name', 'Unknown')
@@ -358,37 +390,41 @@ This is the **clinical decision workflow** for reviewing DRI indicators. The sys
                                 if already_rejected_now and len(already_rejected_now) > 0:
                                     continue
                                 
-                                rule_info_auto = rules_dict.get(ind_auto_id, {})
-                                deficit_type_auto = rule_info_auto.get('DEFICIT_TYPE', 'UNKNOWN') if rule_info_auto else 'UNKNOWN'
-                                default_expiry_auto = rule_info_auto.get('EXPIRY_DAYS', 0) if rule_info_auto else 0
-                                reminder_days_auto = rule_info_auto.get('RENEWAL_REMINDER_DAYS', 7) if rule_info_auto else 7
+                                auto_evidence_list = ind_to_auto.get('evidence', [])
+                                auto_first_evidence = auto_evidence_list[0] if auto_evidence_list else {}
+                                auto_evidence_text = ind_to_auto.get('reasoning', 'Auto-approved via Approve Remaining')
+                                auto_source_id = auto_first_evidence.get('source_id', '')
+                                auto_source_table = auto_first_evidence.get('source_table', '')
                                 
-                                expiry_date_auto = "NULL" if deficit_type_auto == 'PERSISTENT' else f"DATEADD(day, {default_expiry_auto}, CURRENT_DATE())"
-                                review_req_auto = "FALSE" if deficit_type_auto == 'PERSISTENT' else "TRUE"
-                                
-                                execute_query(f"""
-                                    INSERT INTO AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS (
-                                        RESIDENT_ID, CLIENT_SYSTEM_KEY, DEFICIT_ID, DEFICIT_NAME,
-                                        DECISION_TYPE, DECISION_REASON, DEFICIT_TYPE,
-                                        DEFAULT_EXPIRY_DAYS, EXPIRY_DATE, REVIEW_REQUIRED,
-                                        RENEWAL_REMINDER_DAYS, DECIDED_BY
-                                    ) VALUES (
-                                        {row['RESIDENT_ID']}, '{row['CLIENT_SYSTEM_KEY']}', '{ind_auto_id}', '{ind_auto_name.replace("'", "''")}',
-                                        'CONFIRMED', 'Auto-approved via Approve Remaining', '{deficit_type_auto}',
-                                        {default_expiry_auto}, {expiry_date_auto}, {review_req_auto},
-                                        {reminder_days_auto}, CURRENT_USER()
-                                    )
-                                """, session)
+                                try:
+                                    execute_query(f"""
+                                        CALL AGEDCARE.AGEDCARE.DRI_EVENT_PROCESSOR(
+                                            {row['RESIDENT_ID']},
+                                            '{row['CLIENT_SYSTEM_KEY']}',
+                                            '{ind_auto_id}',
+                                            '{ind_auto_name.replace("'", "''")}',
+                                            'CONFIRMED',
+                                            CURRENT_USER(),
+                                            '{auto_evidence_text.replace("'", "''")}',
+                                            '{auto_source_id}',
+                                            '{auto_source_table}',
+                                            '{row['ANALYSIS_ID']}',
+                                            '{row['QUEUE_ID']}'
+                                        )
+                                    """, session)
+                                    approved_count += 1
+                                except Exception as e:
+                                    st.warning(f"Failed to approve {ind_auto_id}: {e}")
                             
                             execute_query(f"""
                                 UPDATE AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE 
                                 SET STATUS = 'APPROVED', 
                                     REVIEW_TIMESTAMP = CURRENT_TIMESTAMP(),
                                     REVIEWER_USER = CURRENT_USER(),
-                                    REVIEWER_NOTES = 'Remaining indicators auto-approved'
+                                    REVIEWER_NOTES = 'Approved {approved_count} indicators via bulk approval'
                                 WHERE QUEUE_ID = '{row['QUEUE_ID']}'
                             """, session)
-                            st.success("Remaining indicators approved and queue item completed!")
+                            st.success(f"Approved {approved_count} indicators and completed queue item!")
                             st.rerun()
                     
                     elif row['STATUS'] in ['APPROVED', 'REJECTED']:

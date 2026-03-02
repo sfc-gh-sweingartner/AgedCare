@@ -15,8 +15,8 @@ This is the **administration hub** for configuring the DRI Intelligence system. 
 
 | Tab | Purpose |
 |-----|---------|
-| **DRI Rules** | View/edit all 33 deficit detection rules with **per-deficit versioning** (global - not client specific) |
-| **Client Settings** | Configure client-specific settings including which rule versions to use |
+| **DRI Rules** | View/edit all 32 deficit detection rules with **per-deficit versioning** (global - not client specific) |
+| **Client Settings** | Configure client-specific settings including temporal processor schedules |
 
 ---
 
@@ -34,7 +34,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
 ---
 
 ### DRI Rules Tab
-- All 33 deficit rules are stored in the unified `DRI_RULES` table
+- All 32 deficit rules are stored in the unified `DRI_RULES` table
 - Each deficit has its own version number (e.g., D001-0001, D001-0002)
 - **Editing always creates a new version** - old versions retained for audit
 - Rules are global - client-specific version assignments are in Client Settings
@@ -43,6 +43,11 @@ The DRI system uses four **detection modes** to identify deficit indicators:
 - Select which **rule version** to use per deficit for each client
 - Configure production model, prompt, and batch schedule
 - Manage adaptive token sizing settings
+- **Time Processor Schedule**: Configure when the daily time processor runs to:
+  - Expire indicators past their expiry date (24h, 60d, 90d based on rule)
+  - Re-evaluate threshold-based indicators (e.g., 2 occurrences in 90 days)
+  - Recalculate DRI scores for affected residents
+- **Manual Controls**: Run the Time Processor manually for testing
         """)
 
     tab1, tab2 = st.tabs(["DRI Rules", "Client Settings"])
@@ -676,6 +681,108 @@ The DRI system uses four **detection modes** to identify deficit indicators:
             )
             
             st.markdown("---")
+            
+            st.subheader("Time Processor Schedule")
+            st.caption("Daily processor that expires old indicators and re-evaluates thresholds.")
+            
+            time_processor_options = {
+                "1:00 AM": "0 1 * * *",
+                "2:00 AM": "0 2 * * *",
+                "3:00 AM": "0 3 * * *",
+                "4:00 AM": "0 4 * * *",
+                "5:00 AM": "0 5 * * *",
+                "6:00 AM": "0 6 * * *",
+                "7:00 AM": "0 7 * * *"
+            }
+            
+            db_time_processor_config = execute_query(f"""
+                SELECT 
+                    CONFIG_JSON:processing_settings:time_processor_schedule::VARCHAR as TIME_SCHEDULE,
+                    CONFIG_JSON:processing_settings:time_processor_enabled::BOOLEAN as TIME_ENABLED
+                FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
+                WHERE CONFIG_ID = '{selected_config_id}'
+            """, session)
+            
+            time_schedule = db_time_processor_config[0]['TIME_SCHEDULE'] if db_time_processor_config and db_time_processor_config[0]['TIME_SCHEDULE'] else '0 2 * * *'
+            time_enabled = db_time_processor_config[0]['TIME_ENABLED'] if db_time_processor_config and db_time_processor_config[0]['TIME_ENABLED'] is not None else False
+            
+            time_col1, time_col2 = st.columns([2, 1])
+            with time_col1:
+                current_time_schedule_name = [k for k, v in time_processor_options.items() if v == time_schedule]
+                default_time_schedule = current_time_schedule_name[0] if current_time_schedule_name else "2:00 AM"
+                
+                selected_time_schedule_name = st.selectbox(
+                    "Time Processor run time",
+                    list(time_processor_options.keys()),
+                    index=list(time_processor_options.keys()).index(default_time_schedule) if default_time_schedule in time_processor_options else 1,
+                    help="When the daily time processor runs to expire indicators and recalculate thresholds"
+                )
+                selected_time_schedule = time_processor_options[selected_time_schedule_name]
+            with time_col2:
+                time_processor_enabled = st.checkbox(
+                    "Enable scheduled run",
+                    value=time_enabled,
+                    help="When enabled, time processor runs automatically at scheduled time"
+                )
+            
+            st.markdown("---")
+            
+            st.subheader("Manual Processor Controls")
+            st.caption("Run processors manually for development and testing.")
+            
+            last_runs = execute_query_df("""
+                SELECT RUN_TYPE, MAX(RUN_TIMESTAMP) as LAST_RUN, MAX(RUN_STATUS) as STATUS
+                FROM AGEDCARE.AGEDCARE.DRI_PROCESSOR_RUNS
+                GROUP BY RUN_TYPE
+                ORDER BY RUN_TYPE
+            """, session)
+            
+            if last_runs is not None and len(last_runs) > 0:
+                with st.container(border=True):
+                    st.markdown("**Recent Processor Runs**")
+                    for _, run in last_runs.iterrows():
+                        status_icon = "✅" if run['STATUS'] == 'SUCCESS' else "❌"
+                        st.caption(f"{run['RUN_TYPE']}: {status_icon} Last run: {run['LAST_RUN']}")
+            
+            manual_col1, manual_col2 = st.columns(2)
+            
+            with manual_col1:
+                st.markdown("**Time Processor**")
+                st.caption("Expires old indicators, re-evaluates thresholds, recalculates scores")
+                if st.button("Run Time Processor Now", key="run_time_processor", icon=":material/schedule:", use_container_width=True):
+                    with st.spinner("Running Time Processor..."):
+                        try:
+                            result = execute_query(f"""
+                                CALL AGEDCARE.AGEDCARE.DRI_TIME_PROCESSOR('{selected_client_key}', 'MANUAL')
+                            """, session)
+                            if result:
+                                result_data = result[0][0] if result[0] else {}
+                                if isinstance(result_data, str):
+                                    import json
+                                    result_data = json.loads(result_data)
+                                st.success(f"Time Processor completed!", icon=":material/check_circle:")
+                                st.json(result_data)
+                        except Exception as e:
+                            st.error(f"Failed: {e}", icon=":material/error:")
+            
+            with manual_col2:
+                st.markdown("**View Processor History**")
+                st.caption("Recent processor run audit trail")
+                if st.button("View Run History", key="view_processor_history", icon=":material/history:", use_container_width=True):
+                    history = execute_query_df("""
+                        SELECT RUN_ID, RUN_TYPE, TRIGGERED_BY, RUN_TIMESTAMP, 
+                               INDICATORS_ACTIVATED, INDICATORS_EXPIRED, OCCURRENCES_LOGGED,
+                               RESIDENTS_AFFECTED, RUN_DURATION_MS, RUN_STATUS
+                        FROM AGEDCARE.AGEDCARE.DRI_PROCESSOR_RUNS
+                        ORDER BY RUN_TIMESTAMP DESC
+                        LIMIT 20
+                    """, session)
+                    if history is not None and len(history) > 0:
+                        st.dataframe(history, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No processor runs recorded yet.", icon=":material/info:")
+            
+            st.markdown("---")
             if st.button("Save All Client Settings", type="primary", key="save_all_client", icon=":material/save:", use_container_width=True):
                 try:
                     escaped_prompt = prompt_text_display.replace("'", "''").replace("\\", "\\\\") if 'prompt_text_display' in dir() else ''
@@ -684,13 +791,21 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                         UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
                         SET CONFIG_JSON = OBJECT_INSERT(
                             OBJECT_INSERT(
-                                CONFIG_JSON, 
-                                'production_settings', 
+                                OBJECT_INSERT(
+                                    CONFIG_JSON, 
+                                    'production_settings', 
+                                    OBJECT_CONSTRUCT(
+                                        'model', '{selected_prod_model}',
+                                        'prompt_text', '{escaped_prompt}',
+                                        'prompt_version', '{prompt_ver}',
+                                        'batch_schedule', '{selected_schedule}'
+                                    ),
+                                    TRUE
+                                ),
+                                'processing_settings',
                                 OBJECT_CONSTRUCT(
-                                    'model', '{selected_prod_model}',
-                                    'prompt_text', '{escaped_prompt}',
-                                    'prompt_version', '{prompt_ver}',
-                                    'batch_schedule', '{selected_schedule}'
+                                    'time_processor_schedule', '{selected_time_schedule}',
+                                    'time_processor_enabled', {str(time_processor_enabled).lower()}
                                 ),
                                 TRUE
                             ),

@@ -465,7 +465,87 @@ CREATE OR REPLACE TABLE AGEDCARE.AGEDCARE.DRI_AUDIT_LOG (
 -- - DRI_RULE_STATE (merged into DRI_CLINICAL_DECISIONS)
 ```
 
-### 2.4 Quality Metrics Tables & Views
+### 2.4 Temporal Processing Tables (v2.4)
+
+```sql
+-- ============================================================================
+-- TEMPORAL PROCESSING TABLES (v2.4 - Event and Time Processors)
+-- ============================================================================
+
+-- DRI_INDICATOR_OCCURRENCES: Tracks each approved occurrence for threshold counting
+CREATE TABLE IF NOT EXISTS AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES (
+    OCCURRENCE_ID STRING DEFAULT UUID_STRING() PRIMARY KEY,
+    RESIDENT_ID INT NOT NULL,
+    CLIENT_SYSTEM_KEY STRING NOT NULL,
+    DEFICIT_ID STRING NOT NULL,
+    DEFICIT_NAME STRING,
+    RULE_NUMBER INT,
+    OCCURRENCE_DATE DATE NOT NULL,
+    SOURCE_ID STRING,
+    SOURCE_TABLE STRING,
+    EVIDENCE_TEXT STRING,
+    APPROVED_BY STRING,
+    APPROVAL_DATE TIMESTAMP_NTZ,
+    ANALYSIS_ID STRING,
+    QUEUE_ID STRING,
+    CREATED_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+COMMENT ON TABLE AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES IS 
+'Tracks each approved detection occurrence for threshold-based indicators (e.g., 2 occurrences in 90 days). 
+Used by DRI_EVENT_PROCESSOR to count occurrences within lookback windows.';
+
+-- DRI_PROCESSOR_RUNS: Audit trail for all processor executions
+CREATE TABLE IF NOT EXISTS AGEDCARE.AGEDCARE.DRI_PROCESSOR_RUNS (
+    RUN_ID STRING DEFAULT UUID_STRING() PRIMARY KEY,
+    RUN_TYPE STRING NOT NULL,  -- 'EVENT' or 'TIME'
+    CLIENT_SYSTEM_KEY STRING,
+    RUN_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    TRIGGERED_BY STRING,  -- 'APPROVAL', 'MANUAL', 'SCHEDULED'
+    RESIDENT_ID INT,
+    INDICATORS_ACTIVATED INT DEFAULT 0,
+    INDICATORS_EXPIRED INT DEFAULT 0,
+    INDICATORS_RENEWED INT DEFAULT 0,
+    OCCURRENCES_LOGGED INT DEFAULT 0,
+    RESIDENTS_AFFECTED INT DEFAULT 0,
+    RUN_DURATION_MS INT,
+    RUN_STATUS STRING,  -- 'SUCCESS', 'FAILED'
+    DETAILS_JSON VARIANT,
+    ERROR_MESSAGE STRING,
+    CREATED_BY STRING DEFAULT CURRENT_USER()
+);
+
+COMMENT ON TABLE AGEDCARE.AGEDCARE.DRI_PROCESSOR_RUNS IS 
+'Audit trail for DRI_EVENT_PROCESSOR (runs after human approval) and DRI_TIME_PROCESSOR (runs daily). 
+Tracks indicators activated, expired, and residents affected.';
+```
+
+### 2.5 Temporal Processing Stored Procedures (v2.4)
+
+```sql
+-- ============================================================================
+-- STORED PROCEDURES FOR TEMPORAL PROCESSING (v2.4)
+-- ============================================================================
+
+-- DRI_EVENT_PROCESSOR: Called after human approval
+-- Logs occurrence, checks threshold, activates indicator if threshold met
+-- Parameters: resident_id, client_key, deficit_id, name, approval_type, approver, 
+--             evidence, source_id, source_table, analysis_id, queue_id
+-- Returns: {run_id, indicator_activated, occurrences_in_window, threshold, message}
+CREATE OR REPLACE PROCEDURE AGEDCARE.AGEDCARE.DRI_EVENT_PROCESSOR(...) 
+RETURNS VARIANT LANGUAGE JAVASCRIPT EXECUTE AS CALLER;
+
+-- DRI_TIME_PROCESSOR: Runs daily (manual for dev/test, scheduled later)
+-- Expires old indicators, re-evaluates thresholds, recalculates DRI scores
+-- Parameters: client_system_key (optional), triggered_by (default 'MANUAL')
+-- Returns: {indicators_expired, residents_affected, details}
+CREATE OR REPLACE PROCEDURE AGEDCARE.AGEDCARE.DRI_TIME_PROCESSOR(
+    P_CLIENT_SYSTEM_KEY STRING DEFAULT NULL,
+    P_TRIGGERED_BY STRING DEFAULT 'MANUAL'
+) RETURNS VARIANT LANGUAGE JAVASCRIPT EXECUTE AS CALLER;
+```
+
+### 2.6 Quality Metrics Tables & Views
 
 **Architecture Note (v1.7):** The AI Observability / TruLens integration has been **removed** in favor of a simpler approval-based quality metrics approach. Quality is measured through the human review workflow, not LLM-as-judge metrics.
 
@@ -1834,9 +1914,9 @@ The warehouse `MYWH` is used ONLY for:
 
 ---
 
-*Document Version: 2.3*  
+*Document Version: 2.4*  
 *Created: 2026-01-28*  
-*Updated: 2026-02-24*  
+*Updated: 2026-03-02*  
 *Status: Approved*
 
 ### Change Log
@@ -1856,3 +1936,4 @@ The warehouse `MYWH` is used ONLY for:
 | 2.1 | 2026-02-24 | **Unified DRI_RULES Table**: Replaced DRI_RAG_INDICATORS, DRI_RAG_DECISIONS, DRI_BUSINESS_RULES, DRI_RULE_STATE with unified DRI_RULES table. Added DRI_CLINICAL_DECISIONS for nurse overrides. Implemented per-deficit versioning (D001-0001 format). Changed prompt versions to auto-increment (v0001 format). Updated Processing Settings tab: read-only prompt display, single Save button, deficit versions table. |
 | 2.2 | 2026-02-24 | **Enhanced Feedback Loop**: Added Section 5.4 with full Feedback Loop page specification. Features: time period filter (7/30/90 days), RAG indicator context filled for AI analysis, increased limits (500 base, 200 detailed, 150 for AI), full indicator context in rejections (ID, name, LLM reasoning, confidence). AI suggestions now indicate fix location (Prompt or RAG Definitions). Added "How to use" sections to batch_testing.py. |
 | 2.3 | 2026-02-24 | **LLM-Optimized Detection Modes**: Added 5 new columns to DRI_RULES: DETECTION_MODE, CLINICAL_GUIDANCE, INCLUSION_TERMS, EXCLUSION_PATTERNS, REGULATORY_REFERENCE. Detection modes: clinical_reasoning (default), structured_data, threshold_aggregation, keyword_guidance. All 33 deficits updated with LLM-optimized settings. Prompt v0009 created with clinical reasoning approach. Legacy rule types retained with "(legacy)" suffix in UI. |
+| 2.4 | 2026-03-02 | **Temporal Processing System**: Added DRI_INDICATOR_OCCURRENCES table (Section 2.4) for threshold counting, DRI_PROCESSOR_RUNS for audit trail. Created DRI_EVENT_PROCESSOR and DRI_TIME_PROCESSOR stored procedures (Section 2.5). Event Processor runs after human approval. Time Processor runs daily to expire indicators and recalculate scores. Updated Configuration page with Time Processor schedule and manual run controls. Review Queue now calls Event Processor on confirm/reject. Resident History enhanced with Occurrence Timeline and DRI Trend tabs. |
