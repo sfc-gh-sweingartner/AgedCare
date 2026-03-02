@@ -206,7 +206,12 @@ Some indicators require multiple occurrences before activation:
                             existing = existing_dict.get(ind_id)
                             
                             if existing is not None:
-                                if existing['DEFICIT_TYPE'] == 'PERSISTENT':
+                                decision_type = existing.get('DECISION_TYPE', 'CONFIRMED')
+                                if decision_type == 'REJECTED':
+                                    review_type = "EXISTING_REJECTED"
+                                    type_badge = "🚫 REJECTED"
+                                    type_color = "red"
+                                elif existing['DEFICIT_TYPE'] == 'PERSISTENT':
                                     review_type = "EXISTING_PERMANENT"
                                     type_badge = "✅ ALREADY CONFIRMED"
                                     type_color = "green"
@@ -242,7 +247,22 @@ Some indicators require multiple occurrences before activation:
                                         for ev in evidence_list:
                                             st.caption(f"- **{ev.get('source_table', 'N/A')}** ({ev.get('event_date', 'N/A')}): {ev.get('text_excerpt', 'N/A')}")
                                 
-                                if review_type == "EXISTING_PERMANENT":
+                                if review_type == "EXISTING_REJECTED":
+                                    expiry = existing['EXPIRY_DATE']
+                                    st.warning(f"Rejected by {existing['DECIDED_BY']} on {existing['DECISION_DATE']}. Suppressed until: {expiry}", icon=":material/block:")
+                                    
+                                    if st.button(f"↩️ Undo Rejection", key=f"undo_reject_{row['QUEUE_ID']}_{ind_id}", use_container_width=True):
+                                        execute_query(f"""
+                                            DELETE FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                                            WHERE RESIDENT_ID = {row['RESIDENT_ID']}
+                                            AND DEFICIT_ID = '{ind_id}'
+                                            AND STATUS = 'ACTIVE'
+                                            AND DECISION_TYPE = 'REJECTED'
+                                        """, session)
+                                        st.success(f"Undid rejection for {ind_id}")
+                                        st.rerun()
+                                
+                                elif review_type == "EXISTING_PERMANENT":
                                     st.info(f"Confirmed by {existing['DECIDED_BY']} on {existing['DECISION_DATE']}. No action required.", icon=":material/check_circle:")
                                 
                                 elif review_type == "EXISTING_TEMPORAL":
@@ -327,6 +347,21 @@ Some indicators require multiple occurrences before activation:
                                         if st.session_state.get(reject_key, False):
                                             with st.form(key=f"reject_form_{row['QUEUE_ID']}_{ind_id}"):
                                                 reason = st.text_input("Rejection reason", placeholder="Why is this a false positive?")
+                                                suppression_options = {
+                                                    "Don't suppress (0 days)": 0,
+                                                    "1 week": 7,
+                                                    "2 weeks": 14,
+                                                    "1 month": 30,
+                                                    "3 months": 90,
+                                                    "6 months": 180,
+                                                    "1 year": 365
+                                                }
+                                                suppression_choice = st.selectbox(
+                                                    "Suppress this indicator for:",
+                                                    options=list(suppression_options.keys()),
+                                                    index=4
+                                                )
+                                                suppression_days = suppression_options[suppression_choice]
                                                 
                                                 col_cancel, col_submit = st.columns(2)
                                                 with col_cancel:
@@ -349,12 +384,16 @@ Some indicators require multiple occurrences before activation:
                                                                     '{source_id}',
                                                                     '{source_table}',
                                                                     '{row['ANALYSIS_ID']}',
-                                                                    '{row['QUEUE_ID']}'
+                                                                    '{row['QUEUE_ID']}',
+                                                                    {suppression_days}
                                                                 )
                                                             """, session)
                                                             
                                                             st.session_state[reject_key] = False
-                                                            st.success(f"Rejected {ind_id} (suppressed for 90 days)")
+                                                            if suppression_days == 0:
+                                                                st.success(f"Rejected {ind_id} (not suppressed)")
+                                                            else:
+                                                                st.success(f"Rejected {ind_id} (suppressed for {suppression_choice})")
                                                             st.rerun()
                                                         except Exception as e:
                                                             st.error(f"Failed to reject: {e}")

@@ -160,14 +160,31 @@ if session:
                 
                 rejections = execute_query_df(f"""
                     SELECT 
-                        ir.REJECTION_REASON,
-                        ir.REJECTED_BY,
-                        ir.REJECTED_TIMESTAMP,
-                        rq.RESIDENT_ID
-                    FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS ir
-                    JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
-                    WHERE ir.INDICATOR_ID = '{row['INDICATOR_ID']}'
-                    ORDER BY ir.REJECTED_TIMESTAMP DESC
+                        REJECTION_REASON,
+                        REJECTED_BY,
+                        REJECTED_TIMESTAMP,
+                        RESIDENT_ID
+                    FROM (
+                        SELECT 
+                            ir.REJECTION_REASON,
+                            ir.REJECTED_BY,
+                            ir.REJECTED_TIMESTAMP,
+                            rq.RESIDENT_ID
+                        FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS ir
+                        JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
+                        WHERE ir.INDICATOR_ID = '{row['INDICATOR_ID']}'
+                        UNION ALL
+                        SELECT 
+                            cd.DECISION_REASON as REJECTION_REASON,
+                            cd.DECIDED_BY as REJECTED_BY,
+                            cd.DECISION_DATE as REJECTED_TIMESTAMP,
+                            cd.RESIDENT_ID
+                        FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS cd
+                        WHERE cd.DEFICIT_ID = '{row['INDICATOR_ID']}'
+                        AND cd.DECISION_TYPE = 'REJECTED'
+                        AND cd.STATUS = 'ACTIVE'
+                    )
+                    ORDER BY REJECTED_TIMESTAMP DESC
                     LIMIT 10
                 """, session)
                 
@@ -184,21 +201,48 @@ if session:
     
     rejection_base_query = f"""
         SELECT 
-            ir.INDICATOR_ID,
-            ir.INDICATOR_NAME,
-            ir.REJECTION_REASON,
-            ir.REJECTED_TIMESTAMP,
-            rq.RESIDENT_ID,
-            lla.ANALYSIS_ID,
-            lla.RAW_RESPONSE
-        FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS ir
-        JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
-        JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+            INDICATOR_ID,
+            INDICATOR_NAME,
+            REJECTION_REASON,
+            REJECTED_TIMESTAMP,
+            RESIDENT_ID,
+            ANALYSIS_ID,
+            RAW_RESPONSE
+        FROM (
+            SELECT 
+                ir.INDICATOR_ID,
+                ir.INDICATOR_NAME,
+                ir.REJECTION_REASON,
+                ir.REJECTED_TIMESTAMP,
+                rq.RESIDENT_ID,
+                lla.ANALYSIS_ID,
+                lla.RAW_RESPONSE,
+                lla.PROMPT_VERSION,
+                rq.CLIENT_SYSTEM_KEY
+            FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS ir
+            JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
+            JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+            UNION ALL
+            SELECT 
+                cd.DEFICIT_ID as INDICATOR_ID,
+                cd.DEFICIT_NAME as INDICATOR_NAME,
+                cd.DECISION_REASON as REJECTION_REASON,
+                cd.DECISION_DATE as REJECTED_TIMESTAMP,
+                cd.RESIDENT_ID,
+                rq.ANALYSIS_ID,
+                lla.RAW_RESPONSE,
+                lla.PROMPT_VERSION,
+                rq.CLIENT_SYSTEM_KEY
+            FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS cd
+            LEFT JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON rq.RESIDENT_ID = cd.RESIDENT_ID
+            LEFT JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+            WHERE cd.DECISION_TYPE = 'REJECTED'
+            AND cd.STATUS = 'ACTIVE'
+        )
         WHERE 1=1
-        {f" AND lla.PROMPT_VERSION = '{selected_version}'" if selected_version else ""}
-        {f" AND rq.CLIENT_SYSTEM_KEY = '{selected_facility}'" if selected_facility != "All Facilities" else ""}
-        {f" AND {time_filter_sql}" if time_filter_sql else ""}
-        ORDER BY ir.REJECTED_TIMESTAMP DESC
+        {f" AND PROMPT_VERSION = '{selected_version}'" if selected_version else ""}
+        {f" AND CLIENT_SYSTEM_KEY = '{selected_facility}'" if selected_facility != "All Facilities" else ""}
+        ORDER BY REJECTED_TIMESTAMP DESC
         LIMIT 500
     """
     
@@ -329,22 +373,54 @@ Return ONLY valid JSON array, no other text."""
         
         detailed_rejections_query = f"""
             SELECT 
-                ir.INDICATOR_ID,
-                ir.INDICATOR_NAME,
-                ir.REJECTION_REASON,
-                rq.RESIDENT_ID,
-                f.value:reasoning::STRING as LLM_REASONING,
-                f.value:confidence::STRING as LLM_CONFIDENCE,
-                f.value:temporal_status:type::STRING as TEMPORAL_TYPE
-            FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS ir
-            JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
-            JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
-            LATERAL FLATTEN(input => lla.RAW_RESPONSE:indicators) f
-            WHERE f.value:deficit_id::STRING = ir.INDICATOR_ID
-            {f" AND lla.PROMPT_VERSION = '{selected_version}'" if selected_version else ""}
-            {f" AND rq.CLIENT_SYSTEM_KEY = '{selected_facility}'" if selected_facility != "All Facilities" else ""}
-            {f" AND {time_filter_sql}" if time_filter_sql else ""}
-            ORDER BY ir.REJECTED_TIMESTAMP DESC
+                INDICATOR_ID,
+                INDICATOR_NAME,
+                REJECTION_REASON,
+                RESIDENT_ID,
+                LLM_REASONING,
+                LLM_CONFIDENCE,
+                TEMPORAL_TYPE
+            FROM (
+                SELECT 
+                    ir.INDICATOR_ID,
+                    ir.INDICATOR_NAME,
+                    ir.REJECTION_REASON,
+                    rq.RESIDENT_ID,
+                    f.value:reasoning::STRING as LLM_REASONING,
+                    f.value:confidence::STRING as LLM_CONFIDENCE,
+                    f.value:temporal_status:type::STRING as TEMPORAL_TYPE,
+                    ir.REJECTED_TIMESTAMP,
+                    lla.PROMPT_VERSION,
+                    rq.CLIENT_SYSTEM_KEY
+                FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS ir
+                JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
+                JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
+                LATERAL FLATTEN(input => lla.RAW_RESPONSE:indicators) f
+                WHERE f.value:deficit_id::STRING = ir.INDICATOR_ID
+                UNION ALL
+                SELECT 
+                    cd.DEFICIT_ID as INDICATOR_ID,
+                    cd.DEFICIT_NAME as INDICATOR_NAME,
+                    cd.DECISION_REASON as REJECTION_REASON,
+                    cd.RESIDENT_ID,
+                    f.value:reasoning::STRING as LLM_REASONING,
+                    f.value:confidence::STRING as LLM_CONFIDENCE,
+                    f.value:temporal_status:type::STRING as TEMPORAL_TYPE,
+                    cd.DECISION_DATE as REJECTED_TIMESTAMP,
+                    lla.PROMPT_VERSION,
+                    rq.CLIENT_SYSTEM_KEY
+                FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS cd
+                LEFT JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON rq.RESIDENT_ID = cd.RESIDENT_ID
+                LEFT JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
+                LATERAL FLATTEN(input => lla.RAW_RESPONSE:indicators) f
+                WHERE cd.DECISION_TYPE = 'REJECTED'
+                AND cd.STATUS = 'ACTIVE'
+                AND f.value:deficit_id::STRING = cd.DEFICIT_ID
+            )
+            WHERE 1=1
+            {f" AND PROMPT_VERSION = '{selected_version}'" if selected_version else ""}
+            {f" AND CLIENT_SYSTEM_KEY = '{selected_facility}'" if selected_facility != "All Facilities" else ""}
+            ORDER BY REJECTED_TIMESTAMP DESC
             LIMIT 200
         """
         
