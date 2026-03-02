@@ -299,7 +299,7 @@ if session:
     
     st.subheader("🚀 Run analysis")
     
-    run_button = st.button("🧪 Run Single Analysis", type="primary", use_container_width=True, help="Test prompt on selected resident")
+    run_button = st.button("🧪 Test Prompt", type="primary", use_container_width=True, help="Test prompt on selected resident")
     
     if run_button:
         with st.spinner(f"Analyzing resident {selected_resident} with {selected_model}..."):
@@ -581,7 +581,7 @@ if session:
                 st.error(f"Analysis failed: {e}")
     
     st.markdown("---")
-    st.caption("💡 **Tip:** Use 'Run Single Analysis' to test prompts. Use 'Batch Testing' page for multi-resident tests with quality metrics.")
+    st.caption("💡 **Tip:** Use 'Test Prompt' to test prompts. Use 'Batch Testing' page for multi-resident tests with quality metrics.")
 
 else:
     st.error("Failed to connect to Snowflake")
