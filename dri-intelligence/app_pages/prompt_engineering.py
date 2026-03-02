@@ -3,7 +3,7 @@
 Interactive page for testing and tuning LLM prompts:
 - Select resident (auto-detects facility)
 - View and override production settings
-- Edit prompts with variable placeholders
+- Edit resident data and prompts
 - Run single analysis and view JSON results
 - Save new prompt versions
 
@@ -29,14 +29,16 @@ This is the **prompt development environment** for testing and tuning LLM prompt
 1. **Select a resident** - Facility is auto-detected from resident data
 2. **Review production settings** - See current prompt version, model, thresholds, and rules
 3. **Override settings for testing** - Temporarily change any setting without affecting production
-4. **Edit the prompt template** - Modify the prompt text directly
-5. **Run analysis** - Test your changes on the selected resident
-6. **Save as new version** - When satisfied, save as a new prompt version
+4. **Edit resident data** - Modify the resident context to test specific scenarios
+5. **Edit the prompt template** - Modify the prompt text directly
+6. **Run analysis** - Test your changes on the selected resident
+7. **Save as new version** - When satisfied, save as a new prompt version
 
 ### Key Features
 | Feature | Description |
 |---------|-------------|
 | **Auto-detect facility** | Resident selection automatically determines the aged care facility |
+| **Editable resident data** | Modify context to test edge cases or specific scenarios |
 | **Production settings summary** | See exactly what's running in production |
 | **Override controls** | Test different models, prompts, thresholds without changing production |
 | **Adaptive token sizing** | Automatically uses larger token limit for residents with more data |
@@ -116,6 +118,54 @@ def load_all_rule_versions(_session):
         GROUP BY DEFICIT_ID, VERSION_NUMBER
         ORDER BY DEFICIT_ID, VERSION_NUMBER DESC
     """, _session)
+
+@st.cache_data(ttl=300)
+def load_resident_context(_session, resident_id):
+    context_query = f"""
+        WITH notes AS (
+            SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400) || ' [' || NOTE_TYPE || ']', ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
+            FROM (SELECT PROGRESS_NOTE, NOTE_TYPE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {resident_id} ORDER BY EVENT_DATE DESC LIMIT 15)
+        ),
+        meds AS (
+            SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as txt
+            FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {resident_id}
+        ),
+        obs AS (
+            SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
+            FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {resident_id} ORDER BY EVENT_DATE DESC LIMIT 30)
+        ),
+        forms AS (
+            SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
+            FROM (SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {resident_id} ORDER BY EVENT_DATE DESC LIMIT 20)
+        ),
+        medical_profile AS (
+            SELECT COALESCE(SPECIAL_NEEDS, '') || ' | Allergies: ' || COALESCE(ALLERGIES, 'None') || ' | Diet: ' || COALESCE(DIET, 'Standard') as txt
+            FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {resident_id}
+        ),
+        obs_groups AS (
+            SELECT LISTAGG(CHART_NAME || ' (' || OBSERVATION_STATUS || '): ' || COALESCE(OBSERVATION_TYPE, '') || ' - ' || COALESCE(OBSERVATION_LOCATION, '') || ' - ' || COALESCE(OBSERVATION_DESCRIPTION, ''), ' | ') as txt
+            FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {resident_id}
+        )
+        SELECT 
+            'MEDICAL PROFILE (DIAGNOSES - PRIMARY SOURCE): ' || COALESCE((SELECT txt FROM medical_profile), 'None') ||
+            '
+
+PROGRESS NOTES: ' || COALESCE((SELECT txt FROM notes), 'None') ||
+            '
+
+MEDICATIONS: ' || COALESCE((SELECT txt FROM meds), 'None') ||
+            '
+
+OBSERVATIONS: ' || COALESCE((SELECT txt FROM obs), 'None') ||
+            '
+
+OBSERVATION GROUPS (Wounds/Pain Charts): ' || COALESCE((SELECT txt FROM obs_groups), 'None') ||
+            '
+
+ASSESSMENT FORMS: ' || COALESCE((SELECT txt FROM forms), 'None') as CONTEXT
+    """
+    result = execute_query(context_query, _session)
+    return result[0]['CONTEXT'] if result else ""
 
 if session:
     st.subheader("1. Select Resident")
@@ -240,156 +290,109 @@ if session:
         if context_threshold != prod_threshold:
             st.caption(f"⚠️ Testing with different threshold (prod: {prod_threshold})")
     
-    st.markdown("**Indicator Rule Versions**")
-    st.caption("Select which version of each rule to use for this test")
-    
-    if all_rule_versions is not None and len(all_rule_versions) > 0:
-        unique_deficits = all_rule_versions[['DEFICIT_ID', 'DEFICIT_NAME']].drop_duplicates(subset=['DEFICIT_ID'])
+    with st.expander("Indicator Rule Versions", expanded=False):
+        st.caption("Select which version of each rule to use for this test")
         
-        test_rule_assignments = {}
-        
-        num_cols = 4
-        deficit_list = list(unique_deficits.iterrows())
-        
-        for i in range(0, len(deficit_list), num_cols):
-            cols = st.columns(num_cols)
-            for j, col in enumerate(cols):
-                if i + j < len(deficit_list):
-                    _, deficit = deficit_list[i + j]
-                    deficit_id = deficit['DEFICIT_ID']
-                    deficit_name = deficit['DEFICIT_NAME'] or deficit_id
-                    
-                    versions_for_deficit = all_rule_versions[all_rule_versions['DEFICIT_ID'] == deficit_id]
-                    version_options = versions_for_deficit['VERSION_NUMBER'].tolist()
-                    
-                    current_assignment = assignment_dict.get(deficit_id, version_options[0] if version_options else None)
-                    
-                    with col:
-                        if version_options:
-                            default_idx = version_options.index(current_assignment) if current_assignment in version_options else 0
-                            selected_rule_version = st.selectbox(
-                                f"{deficit_id}",
-                                version_options,
-                                index=default_idx,
-                                key=f"rule_version_{deficit_id}",
-                                help=f"{deficit_name}"
-                            )
-                            test_rule_assignments[deficit_id] = selected_rule_version
-        
-        st.session_state['test_rule_assignments'] = test_rule_assignments
-    
-    col_ctx1, col_ctx2 = st.columns(2)
-    with col_ctx1:
-        view_context_btn = st.button("📖 View resident data", use_container_width=True)
-    with col_ctx2:
-        preview_prompt_btn = st.button("👁️ Preview full prompt", use_container_width=True)
-    
-    if view_context_btn:
-        with st.spinner("Loading..."):
-            context_query = f"""
-                WITH notes AS (
-                    SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
-                    FROM (SELECT PROGRESS_NOTE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 15)
-                ),
-                meds AS (
-                    SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as txt
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
-                ),
-                obs AS (
-                    SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 50), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
-                    FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
-                ),
-                medical_profile AS (
-                    SELECT COALESCE(SPECIAL_NEEDS, '') || ' | Allergies: ' || COALESCE(ALLERGIES, 'None') || ' | Diet: ' || COALESCE(DIET, 'Standard') as txt
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {selected_resident}
-                ),
-                obs_groups AS (
-                    SELECT LISTAGG(CHART_NAME || ' (' || OBSERVATION_STATUS || '): ' || OBSERVATION_TYPE || ' - ' || OBSERVATION_LOCATION || ' - ' || COALESCE(OBSERVATION_DESCRIPTION, ''), ' | ') as txt
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
-                )
-                SELECT 
-                    'MEDICAL PROFILE (DIAGNOSES):\\n' || COALESCE((SELECT txt FROM medical_profile), 'None') ||
-                    '\\n\\nPROGRESS NOTES:\\n' || COALESCE((SELECT txt FROM notes), 'None') ||
-                    '\\n\\nMEDICATIONS:\\n' || COALESCE((SELECT txt FROM meds), 'None') ||
-                    '\\n\\nOBSERVATIONS:\\n' || COALESCE((SELECT txt FROM obs), 'None') ||
-                    '\\n\\nOBSERVATION GROUPS (Wounds/Pain):\\n' || COALESCE((SELECT txt FROM obs_groups), 'None') as CONTEXT
-            """
-            result = execute_query(context_query, session)
-            if result:
-                st.text_area("Resident context preview", result[0]['CONTEXT'], height=250)
-    
-    if preview_prompt_btn:
-        with st.spinner("Building full prompt..."):
-            full_prompt_query = f"""
-                WITH resident_notes AS (
-                    SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400) || ' [' || NOTE_TYPE || ']', ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as notes_text
-                    FROM (SELECT PROGRESS_NOTE, NOTE_TYPE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 15)
-                ),
-                resident_meds AS (
-                    SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as meds_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
-                ),
-                resident_obs AS (
-                    SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as obs_text
-                    FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
-                ),
-                resident_forms AS (
-                    SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as forms_text
-                    FROM (SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 20)
-                ),
-                resident_medical_profile AS (
-                    SELECT COALESCE(SPECIAL_NEEDS, '') || ' | Allergies: ' || COALESCE(ALLERGIES, 'None') || ' | Diet: ' || COALESCE(DIET, 'Standard') as profile_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {selected_resident}
-                ),
-                resident_obs_groups AS (
-                    SELECT LISTAGG(CHART_NAME || ' (' || OBSERVATION_STATUS || '): ' || COALESCE(OBSERVATION_TYPE, '') || ' - ' || COALESCE(OBSERVATION_LOCATION, '') || ' - ' || COALESCE(OBSERVATION_DESCRIPTION, ''), ' | ') as obs_groups_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
-                ),
-                clinical_rules AS (
-                    SELECT LISTAGG(
-                        '=== ' || DEFICIT_ID || ' - ' || DEFICIT_NAME || ' ===' ||
-                        '\\nDEFICIT_TYPE: ' || DEFICIT_TYPE || 
-                        '\\nEXPIRY_DAYS: ' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 
-                        '\\nRENEWAL_REMINDER_DAYS: ' || COALESCE(TO_VARCHAR(RENEWAL_REMINDER_DAYS), '7') ||
-                        '\\nLOOKBACK_DAYS_HISTORIC: ' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') ||
-                        '\\nRULES_JSON: ' || COALESCE(TO_VARCHAR(RULES_JSON), '[]'),
-                        '\\n\\n'
-                    ) WITHIN GROUP (ORDER BY DEFICIT_ID) as rules_text
-                    FROM AGEDCARE.AGEDCARE.DRI_RULES
-                    WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
-                ),
-                full_context AS (
-                    SELECT 
-                        'MEDICAL PROFILE (DIAGNOSES - PRIMARY SOURCE): ' || COALESCE((SELECT profile_text FROM resident_medical_profile), 'None') ||
-                        '\\n\\nPROGRESS NOTES: ' || COALESCE((SELECT notes_text FROM resident_notes), 'None') ||
-                        '\\n\\nMEDICATIONS: ' || COALESCE((SELECT meds_text FROM resident_meds), 'None') ||
-                        '\\n\\nOBSERVATIONS: ' || COALESCE((SELECT obs_text FROM resident_obs), 'None') ||
-                        '\\n\\nOBSERVATION GROUPS (Wounds/Pain Charts): ' || COALESCE((SELECT obs_groups_text FROM resident_obs_groups), 'None') ||
-                        '\\n\\nASSESSMENT FORMS: ' || COALESCE((SELECT forms_text FROM resident_forms), 'None') as context
-                ),
-                prompt_template AS (
-                    SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'
-                )
-                SELECT 
-                    REPLACE(REPLACE(
-                        (SELECT PROMPT_TEXT FROM prompt_template),
-                        '{{resident_context}}', (SELECT context FROM full_context)
-                    ), '{{rag_indicator_context}}', (SELECT rules_text FROM clinical_rules)) as FULL_PROMPT,
-                    LENGTH(REPLACE(REPLACE(
-                        (SELECT PROMPT_TEXT FROM prompt_template),
-                        '{{resident_context}}', (SELECT context FROM full_context)
-                    ), '{{rag_indicator_context}}', (SELECT rules_text FROM clinical_rules))) as PROMPT_LENGTH
-            """
-            result = execute_query(full_prompt_query, session)
-            if result:
-                full_prompt = result[0]['FULL_PROMPT']
-                prompt_length = result[0]['PROMPT_LENGTH']
-                st.success(f"Full prompt length: {prompt_length:,} characters")
-                st.text_area("Full prompt (exactly what gets sent to LLM)", full_prompt, height=400)
+        if all_rule_versions is not None and len(all_rule_versions) > 0:
+            unique_deficits = all_rule_versions[['DEFICIT_ID', 'DEFICIT_NAME']].drop_duplicates(subset=['DEFICIT_ID'])
+            
+            test_rule_assignments = {}
+            
+            num_cols = 4
+            deficit_list = list(unique_deficits.iterrows())
+            
+            for i in range(0, len(deficit_list), num_cols):
+                cols = st.columns(num_cols)
+                for j, col in enumerate(cols):
+                    if i + j < len(deficit_list):
+                        _, deficit = deficit_list[i + j]
+                        deficit_id = deficit['DEFICIT_ID']
+                        deficit_name = deficit['DEFICIT_NAME'] or deficit_id
+                        
+                        versions_for_deficit = all_rule_versions[all_rule_versions['DEFICIT_ID'] == deficit_id]
+                        version_options = versions_for_deficit['VERSION_NUMBER'].tolist()
+                        
+                        current_assignment = assignment_dict.get(deficit_id, version_options[0] if version_options else None)
+                        
+                        with col:
+                            if version_options:
+                                default_idx = version_options.index(current_assignment) if current_assignment in version_options else 0
+                                selected_rule_version = st.selectbox(
+                                    f"{deficit_id}",
+                                    version_options,
+                                    index=default_idx,
+                                    key=f"rule_version_{deficit_id}",
+                                    help=f"{deficit_name}"
+                                )
+                                test_rule_assignments[deficit_id] = selected_rule_version
+            
+            st.session_state['test_rule_assignments'] = test_rule_assignments
     
     st.markdown("---")
     
-    st.subheader("4. Prompt Template")
+    st.subheader("4. Resident Data")
+    st.caption("Edit the resident context below to test specific scenarios. Changes are not saved to the database.")
+    
+    db_resident_context = load_resident_context(session, selected_resident)
+    
+    if f'resident_context_{selected_resident}' not in st.session_state:
+        st.session_state[f'resident_context_{selected_resident}'] = db_resident_context
+    
+    col_reload, col_char_count = st.columns([1, 3])
+    with col_reload:
+        if st.button("🔄 Reload from DB", use_container_width=True, help="Reset to original data from database"):
+            st.session_state[f'resident_context_{selected_resident}'] = db_resident_context
+            st.rerun()
+    
+    edited_resident_context = st.text_area(
+        "Resident Context (editable)",
+        value=st.session_state[f'resident_context_{selected_resident}'],
+        height=250,
+        key=f"context_editor_{selected_resident}",
+        help="Edit this text to test how the LLM responds to different resident data"
+    )
+    
+    st.session_state[f'resident_context_{selected_resident}'] = edited_resident_context
+    
+    context_length = len(edited_resident_context)
+    if context_length > context_threshold:
+        st.caption(f"📊 Context: {context_length:,} chars (large token mode)")
+    else:
+        st.caption(f"📊 Context: {context_length:,} chars (standard token mode)")
+    
+    preview_prompt_btn = st.button("👁️ Preview full prompt", use_container_width=True)
+    
+    if preview_prompt_btn:
+        with st.spinner("Building full prompt..."):
+            rules_query = """
+                SELECT LISTAGG(
+                    '=== ' || DEFICIT_ID || ' - ' || DEFICIT_NAME || ' ===' ||
+                    '\\nDEFICIT_TYPE: ' || DEFICIT_TYPE || 
+                    '\\nEXPIRY_DAYS: ' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 
+                    '\\nRENEWAL_REMINDER_DAYS: ' || COALESCE(TO_VARCHAR(RENEWAL_REMINDER_DAYS), '7') ||
+                    '\\nLOOKBACK_DAYS_HISTORIC: ' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') ||
+                    '\\nRULES_JSON: ' || COALESCE(TO_VARCHAR(RULES_JSON), '[]'),
+                    '\\n\\n'
+                ) WITHIN GROUP (ORDER BY DEFICIT_ID) as RULES_TEXT
+                FROM AGEDCARE.AGEDCARE.DRI_RULES
+                WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
+            """
+            rules_result = execute_query(rules_query, session)
+            rules_text = rules_result[0]['RULES_TEXT'] if rules_result else ""
+            
+            prompt_data = load_prompt_text(selected_version, session)
+            if prompt_data is not None and len(prompt_data) > 0:
+                prompt_template = prompt_data['PROMPT_TEXT'].iloc[0]
+            else:
+                prompt_template = "No prompt found"
+            
+            full_prompt = prompt_template.replace('{resident_context}', edited_resident_context).replace('{rag_indicator_context}', rules_text)
+            st.success(f"Full prompt length: {len(full_prompt):,} characters")
+            st.text_area("Full prompt (exactly what gets sent to LLM)", full_prompt, height=400)
+    
+    st.markdown("---")
+    
+    st.subheader("5. Prompt Template")
     
     prompt_data = load_prompt_text(selected_version, session)
     if prompt_data is not None and len(prompt_data) > 0:
@@ -435,7 +438,7 @@ if session:
     
     st.markdown("---")
     
-    st.subheader("5. Run Analysis")
+    st.subheader("6. Run Analysis")
     
     run_button = st.button("🧪 Test Prompt", type="primary", use_container_width=True)
     
@@ -445,57 +448,6 @@ if session:
             start_time = time.time()
             
             try:
-                context_size_query = f"""
-                WITH resident_notes AS (
-                    SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400) || ' [' || NOTE_TYPE || ']', ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as notes_text
-                    FROM (SELECT PROGRESS_NOTE, NOTE_TYPE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 15)
-                ),
-                resident_meds AS (
-                    SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as meds_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
-                ),
-                resident_obs AS (
-                    SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as obs_text
-                    FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
-                ),
-                resident_forms AS (
-                    SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as forms_text
-                    FROM (SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 20)
-                ),
-                resident_medical_profile AS (
-                    SELECT COALESCE(SPECIAL_NEEDS, '') || ' | Allergies: ' || COALESCE(ALLERGIES, 'None') || ' | Diet: ' || COALESCE(DIET, 'Standard') as profile_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {selected_resident}
-                ),
-                resident_obs_groups AS (
-                    SELECT LISTAGG(CHART_NAME || ' (' || OBSERVATION_STATUS || '): ' || OBSERVATION_TYPE || ' - ' || OBSERVATION_LOCATION || ' - ' || COALESCE(OBSERVATION_DESCRIPTION, ''), ' | ') as obs_groups_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
-                ),
-                clinical_rules AS (
-                    SELECT LISTAGG(
-                        '=== ' || DEFICIT_ID || ' - ' || DEFICIT_NAME || ' ===' ||
-                        '\\nDEFICIT_TYPE: ' || DEFICIT_TYPE || 
-                        '\\nEXPIRY_DAYS: ' || COALESCE(TO_VARCHAR(EXPIRY_DAYS), '0') || 
-                        '\\nRENEWAL_REMINDER_DAYS: ' || COALESCE(TO_VARCHAR(RENEWAL_REMINDER_DAYS), '7') ||
-                        '\\nLOOKBACK_DAYS_HISTORIC: ' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') ||
-                        '\\nRULES_JSON: ' || COALESCE(TO_VARCHAR(RULES_JSON), '[]'),
-                        ' || '
-                    ) WITHIN GROUP (ORDER BY DEFICIT_ID) as rules_text
-                    FROM AGEDCARE.AGEDCARE.DRI_RULES
-                    WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
-                )
-                SELECT 
-                    LENGTH(COALESCE((SELECT notes_text FROM resident_notes), '')) +
-                    LENGTH(COALESCE((SELECT meds_text FROM resident_meds), '')) +
-                    LENGTH(COALESCE((SELECT obs_text FROM resident_obs), '')) +
-                    LENGTH(COALESCE((SELECT forms_text FROM resident_forms), '')) +
-                    LENGTH(COALESCE((SELECT profile_text FROM resident_medical_profile), '')) +
-                    LENGTH(COALESCE((SELECT obs_groups_text FROM resident_obs_groups), '')) +
-                    LENGTH(COALESCE((SELECT rules_text FROM clinical_rules), '')) as TOTAL_CONTEXT_LENGTH
-                """
-                
-                size_result = execute_query(context_size_query, session)
-                context_length = size_result[0]['TOTAL_CONTEXT_LENGTH'] if size_result else 0
-                
                 CONTEXT_THRESHOLD = context_threshold
                 if context_length > CONTEXT_THRESHOLD:
                     max_tokens = 16384
@@ -506,32 +458,7 @@ if session:
                 
                 st.info(f"Context size: {context_length:,} chars → Using {token_mode} mode ({max_tokens:,} max tokens)")
                 
-                analysis_query = f"""
-                WITH resident_notes AS (
-                    SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400) || ' [' || NOTE_TYPE || ']', ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as notes_text
-                    FROM (SELECT PROGRESS_NOTE, NOTE_TYPE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 15)
-                ),
-                resident_meds AS (
-                    SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as meds_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
-                ),
-                resident_obs AS (
-                    SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as obs_text
-                    FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
-                ),
-                resident_forms AS (
-                    SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as forms_text
-                    FROM (SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 20)
-                ),
-                resident_medical_profile AS (
-                    SELECT COALESCE(SPECIAL_NEEDS, '') || ' | Allergies: ' || COALESCE(ALLERGIES, 'None') || ' | Diet: ' || COALESCE(DIET, 'Standard') as profile_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {selected_resident}
-                ),
-                resident_obs_groups AS (
-                    SELECT LISTAGG(CHART_NAME || ' (' || OBSERVATION_STATUS || '): ' || OBSERVATION_TYPE || ' - ' || OBSERVATION_LOCATION || ' - ' || COALESCE(OBSERVATION_DESCRIPTION, ''), ' | ') as obs_groups_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {selected_resident}
-                ),
-                clinical_rules AS (
+                rules_query = """
                     SELECT LISTAGG(
                         '=== ' || DEFICIT_ID || ' - ' || DEFICIT_NAME || ' ===' ||
                         '\\nDEFICIT_TYPE: ' || DEFICIT_TYPE || 
@@ -540,32 +467,25 @@ if session:
                         '\\nLOOKBACK_DAYS_HISTORIC: ' || COALESCE(LOOKBACK_DAYS_HISTORIC, 'all') ||
                         '\\nRULES_JSON: ' || COALESCE(TO_VARCHAR(RULES_JSON), '[]'),
                         '\\n\\n'
-                    ) WITHIN GROUP (ORDER BY DEFICIT_ID) as rules_text
+                    ) WITHIN GROUP (ORDER BY DEFICIT_ID) as RULES_TEXT
                     FROM AGEDCARE.AGEDCARE.DRI_RULES
                     WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
-                ),
-                full_context AS (
-                    SELECT 
-                        'MEDICAL PROFILE (DIAGNOSES - PRIMARY SOURCE): ' || COALESCE((SELECT profile_text FROM resident_medical_profile), 'None') ||
-                        '\\n\\nPROGRESS NOTES: ' || COALESCE((SELECT notes_text FROM resident_notes), 'None') ||
-                        '\\n\\nMEDICATIONS: ' || COALESCE((SELECT meds_text FROM resident_meds), 'None') ||
-                        '\\n\\nOBSERVATIONS: ' || COALESCE((SELECT obs_text FROM resident_obs), 'None') ||
-                        '\\n\\nOBSERVATION GROUPS (Wounds/Pain Charts): ' || COALESCE((SELECT obs_groups_text FROM resident_obs_groups), 'None') ||
-                        '\\n\\nASSESSMENT FORMS: ' || COALESCE((SELECT forms_text FROM resident_forms), 'None') as context
-                ),
-                prompt_template AS (
-                    SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'
-                )
+                """
+                rules_result = execute_query(rules_query, session)
+                rules_text = rules_result[0]['RULES_TEXT'] if rules_result else ""
+                
+                full_prompt = edited_prompt.replace('{resident_context}', edited_resident_context).replace('{rag_indicator_context}', rules_text)
+                
+                escaped_full_prompt = full_prompt.replace("'", "''")
+                
+                analysis_query = f"""
                 SELECT 
                     SNOWFLAKE.CORTEX.COMPLETE(
                         '{selected_model}',
                         [
                             {{
                                 'role': 'user',
-                                'content': REPLACE(REPLACE(
-                                    (SELECT PROMPT_TEXT FROM prompt_template),
-                                    '{{resident_context}}', (SELECT context FROM full_context)
-                                ), '{{rag_indicator_context}}', (SELECT rules_text FROM clinical_rules))
+                                'content': '{escaped_full_prompt}'
                             }}
                         ],
                         {{
