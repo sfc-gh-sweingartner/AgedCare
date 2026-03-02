@@ -63,10 +63,9 @@ def load_residents_with_facility(_session):
 def load_production_settings(_session, facility_key):
     result = execute_query(f"""
         SELECT 
-            CONFIG_JSON:processing_settings:prompt_version::STRING as PROMPT_VERSION,
-            CONFIG_JSON:processing_settings:model::STRING as MODEL,
-            CONFIG_JSON:client_settings:context_threshold::NUMBER as CONTEXT_THRESHOLD,
-            CONFIG_JSON as FULL_CONFIG
+            CONFIG_JSON:production_settings:prompt_version::VARCHAR as PROMPT_VERSION,
+            CONFIG_JSON:production_settings:model::VARCHAR as MODEL,
+            CONFIG_JSON:client_settings:context_threshold::NUMBER as CONTEXT_THRESHOLD
         FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
         WHERE CLIENT_SYSTEM_KEY = '{facility_key}' AND IS_ACTIVE = TRUE
         LIMIT 1
@@ -74,10 +73,9 @@ def load_production_settings(_session, facility_key):
     if not result:
         result = execute_query("""
             SELECT 
-                CONFIG_JSON:processing_settings:prompt_version::STRING as PROMPT_VERSION,
-                CONFIG_JSON:processing_settings:model::STRING as MODEL,
-                CONFIG_JSON:client_settings:context_threshold::NUMBER as CONTEXT_THRESHOLD,
-                CONFIG_JSON as FULL_CONFIG
+                CONFIG_JSON:production_settings:prompt_version::VARCHAR as PROMPT_VERSION,
+                CONFIG_JSON:production_settings:model::VARCHAR as MODEL,
+                CONFIG_JSON:client_settings:context_threshold::NUMBER as CONTEXT_THRESHOLD
             FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
             WHERE IS_ACTIVE = TRUE
             LIMIT 1
@@ -101,14 +99,22 @@ def load_prompt_text(version, _session):
     """, _session)
 
 @st.cache_data(ttl=300)
-def load_active_rules(_session):
+def load_client_rule_assignments(_session, facility_key):
+    return execute_query_df(f"""
+        SELECT DEFICIT_ID, RULE_VERSION
+        FROM AGEDCARE.AGEDCARE.DRI_CLIENT_RULE_ASSIGNMENTS
+        WHERE CLIENT_SYSTEM_KEY = '{facility_key}'
+    """, _session)
+
+@st.cache_data(ttl=300)
+def load_all_rule_versions(_session):
     return execute_query_df("""
-        SELECT DEFICIT_ID, DEFICIT_NAME, DEFICIT_TYPE, IS_ACTIVE, 
-               RULES_JSON[0]:threshold::NUMBER as THRESHOLD,
-               LOOKBACK_DAYS_HISTORIC, EXPIRY_DAYS
+        SELECT DEFICIT_ID, 
+               MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN DEFICIT_NAME END) as DEFICIT_NAME,
+               VERSION_NUMBER
         FROM AGEDCARE.AGEDCARE.DRI_RULES
-        WHERE IS_CURRENT_VERSION = TRUE
-        ORDER BY DEFICIT_ID
+        GROUP BY DEFICIT_ID, VERSION_NUMBER
+        ORDER BY DEFICIT_ID, VERSION_NUMBER DESC
     """, _session)
 
 if session:
@@ -139,16 +145,22 @@ if session:
     
     prod_settings = load_production_settings(session, detected_facility)
     prompt_versions = load_prompt_versions(session)
-    rules_df = load_active_rules(session)
+    client_assignments = load_client_rule_assignments(session, detected_facility)
+    all_rule_versions = load_all_rule_versions(session)
     
     if prod_settings:
-        prod_prompt = prod_settings.get('PROMPT_VERSION') or 'v0001'
-        prod_model = prod_settings.get('MODEL') or 'claude-3-5-sonnet'
-        prod_threshold = prod_settings.get('CONTEXT_THRESHOLD') or 6000
+        prod_prompt = prod_settings['PROMPT_VERSION'] or 'v0001'
+        prod_model = prod_settings['MODEL'] or 'claude-3-5-sonnet'
+        prod_threshold = prod_settings['CONTEXT_THRESHOLD'] or 6000
     else:
         prod_prompt = 'v0001'
         prod_model = 'claude-3-5-sonnet'
         prod_threshold = 6000
+    
+    if client_assignments is not None and len(client_assignments) > 0:
+        assignment_dict = dict(zip(client_assignments['DEFICIT_ID'], client_assignments['RULE_VERSION']))
+    else:
+        assignment_dict = {}
     
     with st.container(border=True):
         st.caption("These are the current production settings for this facility")
@@ -157,12 +169,11 @@ if session:
         with col1:
             st.metric("Prompt Version", prod_prompt)
         with col2:
-            st.metric("LLM Model", prod_model.split('-')[0].title() if prod_model else "N/A")
+            st.metric("LLM Model", prod_model)
         with col3:
             st.metric("Context Threshold", f"{prod_threshold:,}")
         with col4:
-            active_rules = len(rules_df[rules_df['IS_ACTIVE'] == True]) if rules_df is not None else 0
-            st.metric("Active Rules", f"{active_rules}")
+            st.metric("Active Rules", f"{len(assignment_dict)}")
     
     st.markdown("---")
     
@@ -228,14 +239,44 @@ if session:
         )
         if context_threshold != prod_threshold:
             st.caption(f"⚠️ Testing with different threshold (prod: {prod_threshold})")
+    
+    st.markdown("**Indicator Rule Versions**")
+    st.caption("Select which version of each rule to use for this test")
+    
+    if all_rule_versions is not None and len(all_rule_versions) > 0:
+        unique_deficits = all_rule_versions[['DEFICIT_ID', 'DEFICIT_NAME']].drop_duplicates(subset=['DEFICIT_ID'])
         
-        with st.expander("View Active Indicator Rules", expanded=False):
-            if rules_df is not None and len(rules_df) > 0:
-                for _, rule in rules_df.iterrows():
-                    status = "✅" if rule['IS_ACTIVE'] else "❌"
-                    st.caption(f"{status} **{rule['DEFICIT_ID']}** - {rule['DEFICIT_NAME']} | Type: {rule['DEFICIT_TYPE']} | Threshold: {rule['THRESHOLD']} | Lookback: {rule['LOOKBACK_DAYS_HISTORIC']}")
-            else:
-                st.info("No rules found")
+        test_rule_assignments = {}
+        
+        num_cols = 4
+        deficit_list = list(unique_deficits.iterrows())
+        
+        for i in range(0, len(deficit_list), num_cols):
+            cols = st.columns(num_cols)
+            for j, col in enumerate(cols):
+                if i + j < len(deficit_list):
+                    _, deficit = deficit_list[i + j]
+                    deficit_id = deficit['DEFICIT_ID']
+                    deficit_name = deficit['DEFICIT_NAME'] or deficit_id
+                    
+                    versions_for_deficit = all_rule_versions[all_rule_versions['DEFICIT_ID'] == deficit_id]
+                    version_options = versions_for_deficit['VERSION_NUMBER'].tolist()
+                    
+                    current_assignment = assignment_dict.get(deficit_id, version_options[0] if version_options else None)
+                    
+                    with col:
+                        if version_options:
+                            default_idx = version_options.index(current_assignment) if current_assignment in version_options else 0
+                            selected_rule_version = st.selectbox(
+                                f"{deficit_id}",
+                                version_options,
+                                index=default_idx,
+                                key=f"rule_version_{deficit_id}",
+                                help=f"{deficit_name}"
+                            )
+                            test_rule_assignments[deficit_id] = selected_rule_version
+        
+        st.session_state['test_rule_assignments'] = test_rule_assignments
     
     col_ctx1, col_ctx2 = st.columns(2)
     with col_ctx1:
