@@ -1334,10 +1334,11 @@ All historical versions are retained for audit purposes.
 | 2.2 | 2026-02-24 | **Enhanced Feedback Loop v2.2**: Added time period filter (7/30/90 days), RAG indicator context for AI analysis, increased query limits (500/200/150), full LLM context in rejections (reasoning, confidence), location badges for AI suggestions (📝 Prompt vs 📚 RAG Definitions). |
 | 2.3 | 2026-02-24 | **LLM-Optimized Detection Modes**: Added 4 new detection modes (clinical_reasoning, structured_data, threshold_aggregation, keyword_guidance) to replace regex-based approach. Added DETECTION_MODE, CLINICAL_GUIDANCE, INCLUSION_TERMS, EXCLUSION_PATTERNS, REGULATORY_REFERENCE columns to DRI_RULES. All 33 deficits updated with LLM-optimized settings. Prompt v0009 created with clinical reasoning approach. Legacy rule types retained with "(legacy)" suffix. |
 | 2.4 | 2026-03-02 | **Temporal Processing System**: Added DRI_INDICATOR_OCCURRENCES table for threshold counting, DRI_PROCESSOR_RUNS for audit trail. Created DRI_EVENT_PROCESSOR (runs after human approval) and DRI_TIME_PROCESSOR (runs daily). Updated Configuration page with Time Processor controls. Review Queue calls Event Processor on confirm/reject. Resident History enhanced with Occurrence Timeline and DRI Trend tabs. |
+| 2.5 | 2026-03-03 | **Prompt Engineering Deficit Context**: Results section now shows existing deficit status alongside detected deficits. Displays: already flagged status, prior occurrence count/dates, threshold status, and "approving will FLAG" prediction. |
 
 ---
 
-*Document Version: 2.5*  
+*Document Version: 2.6*  
 *Created: 2025-01-27*  
-*Updated: 2026-03-02*  
+*Updated: 2026-03-03*  
 *Status: Approved*

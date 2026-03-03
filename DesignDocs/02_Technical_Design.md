@@ -1047,6 +1047,11 @@ dri-intelligence/
 - Evidence display with source table and excerpt
 - Processing time and token mode display
 - Save new prompt version capability
+- **Deficit context in results (v2.5)**: For each detected deficit, shows:
+  - Whether deficit is already flagged (with expiry date if applicable)
+  - Prior occurrence count and dates within lookback window
+  - Threshold status (e.g., "2 of 3 occurrences")
+  - Will-flag prediction ("approving will FLAG this deficit")
 
 ### 5.3 Page 3: Review Queue
 
@@ -1932,9 +1937,9 @@ The warehouse `MYWH` is used ONLY for:
 
 ---
 
-*Document Version: 2.4*  
+*Document Version: 2.5*  
 *Created: 2026-01-28*  
-*Updated: 2026-03-02*  
+*Updated: 2026-03-03*  
 *Status: Approved*
 
 ### Change Log
@@ -1955,3 +1960,4 @@ The warehouse `MYWH` is used ONLY for:
 | 2.2 | 2026-02-24 | **Enhanced Feedback Loop**: Added Section 5.4 with full Feedback Loop page specification. Features: time period filter (7/30/90 days), RAG indicator context filled for AI analysis, increased limits (500 base, 200 detailed, 150 for AI), full indicator context in rejections (ID, name, LLM reasoning, confidence). AI suggestions now indicate fix location (Prompt or RAG Definitions). Added "How to use" sections to batch_testing.py. |
 | 2.3 | 2026-02-24 | **LLM-Optimized Detection Modes**: Added 5 new columns to DRI_RULES: DETECTION_MODE, CLINICAL_GUIDANCE, INCLUSION_TERMS, EXCLUSION_PATTERNS, REGULATORY_REFERENCE. Detection modes: clinical_reasoning (default), structured_data, threshold_aggregation, keyword_guidance. All 33 deficits updated with LLM-optimized settings. Prompt v0009 created with clinical reasoning approach. Legacy rule types retained with "(legacy)" suffix in UI. |
 | 2.4 | 2026-03-02 | **Temporal Processing System**: Added DRI_INDICATOR_OCCURRENCES table (Section 2.4) for threshold counting, DRI_PROCESSOR_RUNS for audit trail. Created DRI_EVENT_PROCESSOR and DRI_TIME_PROCESSOR stored procedures (Section 2.5). Event Processor runs after human approval. Time Processor runs daily to expire indicators and recalculate scores. Updated Configuration page with Time Processor schedule and manual run controls. Review Queue now calls Event Processor on confirm/reject. Resident History enhanced with Occurrence Timeline and DRI Trend tabs. |
+| 2.5 | 2026-03-03 | **Prompt Engineering Deficit Context**: Results section now shows existing deficit status alongside detected deficits. For each detection, displays: already flagged status, prior occurrence count and dates, threshold status (X of Y occurrences), and "approving will FLAG" prediction when threshold would be met. |

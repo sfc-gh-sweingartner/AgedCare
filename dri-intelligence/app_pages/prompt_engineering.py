@@ -47,6 +47,14 @@ This is the **prompt development environment** for testing and tuning LLM prompt
 | **Production settings summary** | See exactly what's running in production |
 | **Override controls** | Test different models, prompts, thresholds without changing production |
 | **Adaptive token sizing** | Automatically uses larger token limit for residents with more data |
+| **Deficit context in results** | Shows existing occurrences, flagged status, and threshold impact for each detected deficit |
+
+### Results Section
+For each detected deficit, the results now show:
+- **Already flagged**: Indicates if deficit is already active with expiry date
+- **Prior occurrences**: Count and dates of approved occurrences within the lookback window
+- **Threshold status**: Shows "X of Y occurrences" toward threshold
+- **Will flag prediction**: Indicates if approving will meet threshold and flag the deficit
 
 ### Variable Placeholders
 The prompt template includes these variables that get replaced at runtime:
@@ -123,6 +131,69 @@ def load_all_rule_versions(_session):
         GROUP BY DEFICIT_ID, VERSION_NUMBER
         ORDER BY DEFICIT_ID, VERSION_NUMBER DESC
     """, _session)
+
+@st.cache_data(ttl=300)
+def load_deficit_context(_session, resident_id):
+    """Load existing deficit status and occurrences for a resident."""
+    rules = execute_query_df("""
+        SELECT DEFICIT_ID, DEFICIT_NAME, DEFICIT_TYPE, 
+               COALESCE(RULES_JSON[0]:threshold::NUMBER, 1) as THRESHOLD,
+               CASE WHEN LOOKBACK_DAYS_HISTORIC = 'all' OR LOOKBACK_DAYS_HISTORIC IS NULL THEN 9999 
+               ELSE TRY_TO_NUMBER(LOOKBACK_DAYS_HISTORIC) END as LOOKBACK_DAYS
+        FROM AGEDCARE.AGEDCARE.DRI_RULES
+        WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
+    """, _session)
+    
+    occurrences = execute_query_df(f"""
+        SELECT DEFICIT_ID, OCCURRENCE_DATE, EVIDENCE_TEXT
+        FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES
+        WHERE RESIDENT_ID = {resident_id}
+        ORDER BY DEFICIT_ID, OCCURRENCE_DATE DESC
+    """, _session)
+    
+    active_flags = execute_query_df(f"""
+        SELECT DEFICIT_ID, DECISION_TYPE, EXPIRY_DATE, DECISION_DATE
+        FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+        WHERE RESIDENT_ID = {resident_id} AND STATUS = 'ACTIVE' AND DECISION_TYPE = 'CONFIRMED'
+    """, _session)
+    
+    context = {}
+    if rules is not None:
+        for _, rule in rules.iterrows():
+            deficit_id = rule['DEFICIT_ID']
+            lookback_days = int(rule['LOOKBACK_DAYS']) if rule['LOOKBACK_DAYS'] else 9999
+            threshold = int(rule['THRESHOLD']) if rule['THRESHOLD'] else 1
+            
+            occ_list = []
+            if occurrences is not None:
+                deficit_occs = occurrences[occurrences['DEFICIT_ID'] == deficit_id]
+                from datetime import datetime, timedelta
+                cutoff = datetime.now().date() - timedelta(days=lookback_days)
+                for _, occ in deficit_occs.iterrows():
+                    occ_date = occ['OCCURRENCE_DATE']
+                    if hasattr(occ_date, 'date'):
+                        occ_date = occ_date.date()
+                    if occ_date >= cutoff:
+                        occ_list.append(str(occ_date))
+            
+            is_flagged = False
+            expiry_date = None
+            if active_flags is not None:
+                flag_row = active_flags[active_flags['DEFICIT_ID'] == deficit_id]
+                if len(flag_row) > 0:
+                    is_flagged = True
+                    expiry_date = flag_row['EXPIRY_DATE'].iloc[0]
+            
+            context[deficit_id] = {
+                'threshold': threshold,
+                'lookback_days': lookback_days,
+                'occurrence_count': len(occ_list),
+                'occurrence_dates': occ_list,
+                'is_flagged': is_flagged,
+                'expiry_date': expiry_date,
+                'deficit_type': rule['DEFICIT_TYPE']
+            }
+    return context
 
 @st.cache_data(ttl=300)
 def load_resident_context(_session, resident_id):
@@ -566,13 +637,46 @@ if session:
                                 
                                 if 'indicators' in parsed and parsed['indicators']:
                                     st.markdown("### Detected Deficits")
+                                    deficit_context = load_deficit_context(session, selected_resident)
+                                    
                                     for ind in parsed['indicators']:
                                         confidence = ind.get('confidence', 'N/A')
                                         requires_review = ind.get('requires_review', False)
                                         conf_color = '#28a745' if confidence == 'high' else '#ffc107' if confidence == 'medium' else '#dc3545'
                                         review_badge = ' REVIEW' if requires_review else ''
+                                        deficit_id = ind.get('deficit_id', 'Unknown')
                                         
-                                        with st.expander(f"{ind.get('deficit_id', 'Unknown')} - {ind.get('deficit_name', 'Unknown')} ({confidence} confidence){review_badge}", expanded=False):
+                                        ctx = deficit_context.get(deficit_id, {})
+                                        is_flagged = ctx.get('is_flagged', False)
+                                        occ_count = ctx.get('occurrence_count', 0)
+                                        threshold = ctx.get('threshold', 1)
+                                        occ_dates = ctx.get('occurrence_dates', [])
+                                        lookback = ctx.get('lookback_days', 9999)
+                                        
+                                        flag_badge = " ✅ FLAGGED" if is_flagged else ""
+                                        will_flag = (occ_count + 1) >= threshold and not is_flagged
+                                        
+                                        with st.expander(f"{deficit_id} - {ind.get('deficit_name', 'Unknown')} ({confidence} confidence){review_badge}{flag_badge}", expanded=False):
+                                            if is_flagged:
+                                                expiry = ctx.get('expiry_date')
+                                                if expiry:
+                                                    st.success(f"Already flagged (expires: {expiry})")
+                                                else:
+                                                    st.success("Already flagged (persistent)")
+                                            else:
+                                                if occ_count > 0:
+                                                    st.info(f"**{occ_count} of {threshold} occurrences** in {lookback} days")
+                                                    if occ_dates:
+                                                        st.caption(f"Prior dates: {', '.join(occ_dates[:5])}")
+                                                else:
+                                                    st.caption(f"No prior occurrences (threshold: {threshold} in {lookback} days)")
+                                                
+                                                if will_flag:
+                                                    st.success(f"**{occ_count + 1} of {threshold} occurrences** - approving will FLAG this deficit ✅")
+                                                elif threshold > 1:
+                                                    remaining = threshold - occ_count - 1
+                                                    st.caption(f"After approval: {occ_count + 1} of {threshold} ({remaining} more needed)")
+                                            
                                             st.markdown(f"**Reasoning:** {ind.get('reasoning', 'N/A')}")
                                             
                                             temporal = ind.get('temporal_status', {})
