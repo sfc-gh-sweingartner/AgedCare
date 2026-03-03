@@ -25,6 +25,11 @@ if session:
 ### Purpose
 This is the **prompt development environment** for testing and tuning LLM prompts before deploying them to production.
 
+### Terminology
+- **Deficit**: A clinical condition being tracked (D001-D032)
+- **Occurrence**: Evidence that a deficit may exist (individual detection)
+- **Flag**: When a deficit becomes active after approval
+
 ### Workflow
 1. **Select a resident** - Facility is auto-detected from resident data
 2. **Review production settings** - See current prompt version, model, thresholds, and rules
@@ -47,10 +52,10 @@ This is the **prompt development environment** for testing and tuning LLM prompt
 The prompt template includes these variables that get replaced at runtime:
 - `{client_form_mappings}` - Client-specific form field mappings
 - `{resident_context}` - All resident data (notes, meds, observations, forms)
-- `{rag_indicator_context}` - DRI rules from the DRI_RULES table
+- `{rag_indicator_context}` - DRI rules (deficit definitions) from the DRI_RULES table
         """)
     
-    st.caption("Test and tune LLM prompts for DRI indicator detection")
+    st.caption("Test and tune LLM prompts for DRI deficit detection. Deficits (D001-D032) are the clinical conditions tracked by DRI.")
 
 @st.cache_data(ttl=300)
 def load_residents_with_facility(_session):
@@ -290,8 +295,8 @@ if session:
         if context_threshold != prod_threshold:
             st.caption(f"⚠️ Testing with different threshold (prod: {prod_threshold})")
     
-    with st.expander("Indicator Rule Versions", expanded=False):
-        st.caption("Select which version of each rule to use for this test")
+    with st.expander("Deficit Rule Versions", expanded=False):
+        st.caption("Select which version of each deficit rule to use for this test")
         
         if all_rule_versions is not None and len(all_rule_versions) > 0:
             unique_deficits = all_rule_versions[['DEFICIT_ID', 'DEFICIT_NAME']].drop_duplicates(subset=['DEFICIT_ID'])
@@ -551,16 +556,16 @@ if session:
                                     summary = parsed['summary']
                                     cols = st.columns(3)
                                     with cols[0]:
-                                        st.metric("Indicators detected", summary.get('indicators_detected', 0))
+                                        st.metric("Deficits detected", summary.get('indicators_detected', 0))
                                     with cols[1]:
-                                        st.metric("Indicators cleared", summary.get('indicators_cleared', 0))
+                                        st.metric("Deficits cleared", summary.get('indicators_cleared', 0))
                                     with cols[2]:
                                         st.metric("Requires review", summary.get('requires_review_count', 0))
                                     if 'analysis_notes' in summary:
                                         st.caption(summary['analysis_notes'])
                                 
                                 if 'indicators' in parsed and parsed['indicators']:
-                                    st.markdown("### Detected Indicators")
+                                    st.markdown("### Detected Deficits")
                                     for ind in parsed['indicators']:
                                         confidence = ind.get('confidence', 'N/A')
                                         requires_review = ind.get('requires_review', False)

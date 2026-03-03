@@ -9,43 +9,48 @@ with st.expander("How to use this page", expanded=False, icon=":material/help:")
 ### Purpose
 This is the **continuous improvement hub** for LLM prompt accuracy. It closes the feedback loop by analyzing rejection patterns and using AI to suggest targeted prompt improvements.
 
+### Terminology
+- **Deficit**: A clinical condition being tracked (D001-D032)
+- **Occurrence**: Evidence that a deficit may exist (individual detection)
+- **Flag**: When a deficit becomes active after approval
+
 ### Sections
 
 | Section | Purpose |
 |---------|---------|
-| **Indicator Rejection Stats** | Overview metrics and bar chart showing which indicators are most frequently rejected |
-| **Detailed Rejections** | Drill-down table with full context: indicator ID, name, LLM reasoning, confidence, and human rejection reason |
+| **Deficit Rejection Stats** | Overview metrics and bar chart showing which deficits are most frequently rejected |
+| **Detailed Rejections** | Drill-down table with full context: deficit ID, name, LLM reasoning, confidence, and human rejection reason |
 | **AI Prompt Analysis** | Cortex AI analyzes rejection patterns against the current prompt and suggests specific improvements |
 
 ### Key Features
 - **Time Period Filter**: Analyze rejections from All Time, Last 7/30/90 days
 - **Facility Filter**: Focus on specific facilities or view all
 - **Prompt Version Filter**: Compare rejection rates across prompt versions
-- **RAG Context Included**: AI sees both the prompt text AND the indicator definitions, so it can suggest fixes to either
+- **RAG Context Included**: AI sees both the prompt text AND the deficit definitions, so it can suggest fixes to either
 
 ### AI Suggestion Output
 The AI provides actionable improvements:
 - **📝 Prompt Fixes**: Specific text to modify in the prompt
-- **📚 RAG Definition Fixes**: Suggested improvements to indicator definitions
+- **📚 RAG Definition Fixes**: Suggested improvements to deficit definitions
 - **Expected Impact**: Estimated reduction in rejection rate
 
 ### Workflow
 1. Run batch tests in **Batch Testing**
-2. Review and approve/reject indicators in **Review Queue**
-3. Come here to analyze why indicators were rejected
+2. Review and approve/reject deficits in **Review Queue**
+3. Come here to analyze why deficits were rejected
 4. Apply AI suggestions in **Prompt Engineering** or **Configuration > DRI Rules**
 5. Re-test to measure improvement
 
 ### Tips
-- Focus on indicators with >10% rejection rate first
-- Look for patterns: same rejection reason across multiple indicators
+- Focus on deficits with >10% rejection rate first
+- Look for patterns: same rejection reason across multiple deficits
 - After making changes, re-run batch tests and compare approval rates
     """)
 
 session = get_snowflake_session()
 
 if session:
-    st.caption("Analyze rejection patterns and get AI suggestions to improve prompt accuracy.")
+    st.caption("Analyze rejection patterns and get AI suggestions to improve prompt accuracy. Deficits are the 32 clinical conditions (D001-D032).")
     
     col_filter1, col_filter2, col_filter3 = st.columns(3)
     
@@ -105,7 +110,7 @@ if session:
     
     st.markdown("---")
     
-    st.subheader(":material/bar_chart: Indicator Rejection Rates")
+    st.subheader(":material/bar_chart: Deficit Rejection Rates")
     
     review_stats = execute_query_df(f"""
         SELECT 
@@ -130,7 +135,7 @@ if session:
         
         with st.container(border=True):
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            col_m1.metric("Total Indicator Reviews", total_reviews)
+            col_m1.metric("Total Deficit Reviews", total_reviews)
             col_m2.metric("Accepted", total_accepted, delta=f"{round(100*total_accepted/total_reviews,1)}%")
             col_m3.metric("Rejected", total_rejected, delta=f"-{overall_reject_rate}%", delta_color="inverse")
             col_m4.metric("Overall Reject Rate", f"{overall_reject_rate}%")
@@ -144,7 +149,7 @@ if session:
             color="#ff6b6b"
         )
         
-        st.markdown("**Indicator Details:**")
+        st.markdown("**Deficit Details:**")
         for idx, row in review_stats.iterrows():
             rate = row['REJECTION_RATE_PCT']
             status_emoji = "🔴" if rate >= 50 else "🟡" if rate >= 20 else "🟢"
@@ -193,7 +198,7 @@ if session:
                     for _, rej in rejections.iterrows():
                         st.markdown(f"- **Resident {rej['RESIDENT_ID']}**: _{rej['REJECTION_REASON']}_")
     else:
-        st.info("No reviewed indicators found. Run batch tests and review them in the Review Queue first.", icon=":material/info:")
+        st.info("No reviewed deficits found. Run batch tests and review them in the Review Queue first.", icon=":material/info:")
     
     st.markdown("---")
     
@@ -316,7 +321,7 @@ Return ONLY valid JSON array, no other text."""
                     if theme.get('affected_indicators'):
                         st.markdown(f"*Affects:* `{', '.join(theme.get('affected_indicators', []))}`")
     else:
-        st.info("No rejection data available yet. Reject some indicators in the Review Queue first.", icon=":material/info:")
+        st.info("No rejection data available yet. Reject some deficits in the Review Queue first.", icon=":material/info:")
     
     st.markdown("---")
     

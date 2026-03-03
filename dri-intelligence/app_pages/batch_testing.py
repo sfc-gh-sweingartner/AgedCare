@@ -35,15 +35,20 @@ This page provides **batch testing** capabilities and **approval-based quality m
 | **Prompt Quality** | View approval rates by prompt version to identify best-performing prompts |
 | **Ground Truth** | Track validated decisions and harvest ground truth from approvals |
 
+### Terminology
+- **Deficit**: A clinical condition being tracked (D001-D032)
+- **Occurrence**: Evidence that a deficit may exist (individual detection)
+- **Flag**: When a deficit becomes active after approval
+
 ### Workflow
 1. **Run Batch Test**: Select a client and sample size, run analysis
-2. **Review in Review Queue**: Approve/reject detected indicators
+2. **Review in Review Queue**: Approve/reject detected deficits
 3. **Analyze Quality**: Return here to see how your prompt performed
 4. **Iterate**: If rejection rate is high, use Feedback Loop page to improve prompt
 
 ### Quality Metrics
-- **Approval Rate**: Primary metric - % of detections approved by reviewers
-- **Rejection Rate**: % of detections rejected (indicates prompt issues)
+- **Approval Rate**: Primary metric - % of deficit detections approved by reviewers
+- **Rejection Rate**: % of deficit detections rejected (indicates prompt issues)
 - **Ground Truth**: Validated decisions that can be used for future testing
 
 ### Tips
@@ -424,7 +429,7 @@ This page provides **batch testing** capabilities and **approval-based quality m
 ### How It Works
 
 ```
-1. LLM analyzes resident → Proposes DRI changes
+1. LLM analyzes resident → Proposes deficit detections
 2. Reviewer approves or rejects → Captures clinical judgment
 3. Approved = correct → Becomes positive ground truth
 4. Rejected = incorrect → Becomes negative ground truth

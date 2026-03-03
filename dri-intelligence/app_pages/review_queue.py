@@ -20,46 +20,51 @@ if session:
     with st.expander("How to use this page", expanded=False, icon=":material/help:"):
         st.markdown("""
 ### Purpose
-This is the **clinical decision workflow** for reviewing DRI indicators. The system now remembers clinical decisions at the resident + indicator level with time-bound validity.
+This is the **clinical decision workflow** for reviewing DRI deficits. The system now remembers clinical decisions at the resident + deficit level with time-bound validity.
+
+### Terminology
+- **Deficit**: A clinical condition being tracked (D001-D032)
+- **Occurrence**: Evidence that a deficit may exist (individual detection)
+- **Flag**: When a deficit becomes active after approval
 
 ### What Happens Behind the Scenes
-When you **Confirm** an indicator:
+When you **Confirm** a deficit:
 1. **Event Processor** logs the occurrence in `DRI_INDICATOR_OCCURRENCES`
 2. Counts occurrences within the rule's lookback window (e.g., 90 days)
-3. If threshold met (e.g., 2 of 2), activates the indicator
+3. If threshold met (e.g., 2 of 2), activates the deficit (flags it)
 4. If not met, you'll see feedback like "Occurrence logged (1 of 2 needed)"
 
-When you **Reject** an indicator:
+When you **Reject** a deficit:
 - Records rejection for future prompt improvement analysis
-- Indicator is NOT activated regardless of occurrence count
+- Deficit is NOT flagged regardless of occurrence count
 
 ### Review Types
 
 | Type | Description | Actions |
 |------|-------------|---------|
 | 🆕 **NEW** | First-time detection for this resident | CONFIRM or REJECT |
-| ✅ **EXISTING (Permanent)** | Already confirmed persistent indicator | View only (no action needed) |
-| 🔄 **EXISTING (Temporal)** | Already confirmed fluctuating indicator | EXTEND or END |
-| ⏰ **RENEWAL REQUIRED** | Confirmed indicator approaching expiry | RENEW or LET EXPIRE |
+| ✅ **EXISTING (Permanent)** | Already confirmed persistent deficit | View only (no action needed) |
+| 🔄 **EXISTING (Temporal)** | Already confirmed fluctuating deficit | EXTEND or END |
+| ⏰ **RENEWAL REQUIRED** | Confirmed deficit approaching expiry | RENEW or LET EXPIRE |
 
 ### Clinical Decision Types
-- **CONFIRM**: Indicator is clinically accurate - logs occurrence and checks threshold
+- **CONFIRM**: Deficit is clinically accurate - logs occurrence and checks threshold
 - **REJECT**: False positive - suppress for specified duration (default 90 days)
 
 ### Threshold-Based Rules (V0.7)
-Some indicators require multiple occurrences before activation:
+Some deficits require multiple occurrences before becoming flagged:
 - **Falls (D012)**: 2 occurrences in 365 days → 24hr expiry
 - **Insomnia (D026)**: 3 occurrences in 90 days (DSM-5 criteria)
-- Most others: 1 occurrence activates immediately
+- Most others: 1 occurrence flags immediately
 
 ### Workflow
 1. Filter by review type to focus on new or renewal items
 2. Review evidence and AI reasoning
 3. Make clinical decision with optional duration override
-4. System shows feedback: "Indicator activated" or "Occurrence logged (X of Y needed)"
+4. System shows feedback: "Deficit flagged" or "Occurrence logged (X of Y needed)"
         """)
 
-    st.caption("Clinical review workflow with temporal memory for indicator decisions")
+    st.caption("Clinical review workflow with temporal memory for deficit decisions. Deficits (D001-D032) are the clinical conditions tracked by DRI.")
     
     with st.container(border=True):
         col1, col2, col3, col4, col5 = st.columns(5)
@@ -133,7 +138,7 @@ Some indicators require multiple occurrences before activation:
                 severity_color = {"Low": "🟢", "Medium": "🟡", "High": "🟠", "Very High": "🔴"}.get(row['PROPOSED_SEVERITY_BAND'], "⚪")
                 status_badge = {"PENDING": "⏳", "APPROVED": "✅", "REJECTED": "❌"}.get(row['STATUS'], "")
                 
-                with st.expander(f"{status_badge} Resident {row['RESIDENT_ID']} - {severity_color} {row['PROPOSED_SEVERITY_BAND'] or 'Unknown'} ({row['INDICATORS_ADDED'] or 0} indicators)"):
+                with st.expander(f"{status_badge} Resident {row['RESIDENT_ID']} - {severity_color} {row['PROPOSED_SEVERITY_BAND'] or 'Unknown'} ({row['INDICATORS_ADDED'] or 0} deficits)"):
                     col1, col2 = st.columns(2)
                     
                     with col1:
@@ -219,8 +224,8 @@ Some indicators require multiple occurrences before activation:
                                     review_type = "EXISTING_TEMPORAL"
                                     type_badge = "🔄 EXISTING"
                                     type_color = "blue"
-                            else:
-                                review_type = "NEW_INDICATOR"
+                            if review_type == "NEW_INDICATOR":
+                                review_type = "NEW_DEFICIT"
                                 type_badge = "🆕 NEW"
                                 type_color = "orange"
                             
@@ -297,7 +302,7 @@ Some indicators require multiple occurrences before activation:
                                             st.success(f"Ended {ind_id}")
                                             st.rerun()
                                 
-                                elif review_type == "NEW_INDICATOR":
+                                elif review_type == "NEW_DEFICIT":
                                     col_confirm, col_reject = st.columns(2)
                                     
                                     evidence_list = ind.get('evidence', [])

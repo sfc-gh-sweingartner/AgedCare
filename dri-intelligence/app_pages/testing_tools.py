@@ -12,21 +12,26 @@ if session:
 ### Purpose
 This page provides **testing utilities** for the temporal processing system - generate test data for threshold/expiry testing, and reset data during development.
 
+### Terminology
+- **Deficit**: A clinical condition being tracked (D001-D032)
+- **Occurrence**: Evidence that a deficit may exist (individual detection)
+- **Flag**: When a deficit becomes active after approval
+
 ### Features
 - **Generate Test Scenarios**: Create historic approval data to test time/count based thresholds
 - **Clear Review Decisions**: Remove approval/rejection decisions from the review queue
 - **Clear Analysis Results**: Remove LLM analysis records
-- **Clear Indicator Status**: Reset deficit status for residents
+- **Clear Deficit Status**: Reset deficit status for residents
 
 ### Test Scenario Types
 | Scenario | Purpose |
 |----------|---------|
-| **Just Under Threshold** | Generate threshold-1 occurrences (should NOT activate) |
-| **Meets Threshold** | Generate exactly threshold occurrences (SHOULD activate) |
+| **Just Under Threshold** | Generate threshold-1 occurrences (deficit should NOT be flagged) |
+| **Meets Threshold** | Generate exactly threshold occurrences (deficit SHOULD be flagged) |
 | **Outside Lookback** | Occurrences older than lookback period (should NOT count) |
 | **Mixed Window** | Some inside, some outside lookback window |
-| **Near Expiry** | Active indicator approaching expiry date |
-| **Already Expired** | Historic indicator that should have expired |
+| **Near Expiry** | Active deficit flag approaching expiry date |
+| **Already Expired** | Historic deficit flag that should have expired |
 
 ### ⚠️ Warning
 Clear operations **permanently delete** data. Use with caution in production environments.
@@ -112,20 +117,20 @@ Clear operations **permanently delete** data. Use with caution in production env
                     scenarios = {
                         "threshold_under": {
                             "name": "🔢 Just Under Threshold",
-                            "description": "Generate threshold-1 occurrences within lookback window. Indicator should NOT activate.",
+                            "description": "Generate threshold-1 occurrences within lookback window. Deficit should NOT be flagged.",
                             "best_for": "D023 (Incontinence, threshold=50) or D014 (Polypharmacy, threshold=5)",
                             "rules": high_threshold_rules if len(high_threshold_rules) > 0 else rules_df
                         },
                         "threshold_meets": {
                             "name": "✅ Meets Threshold",
-                            "description": "Generate exactly threshold occurrences within lookback window. Indicator SHOULD activate.",
-                            "best_for": "Any indicator - tests activation logic",
+                            "description": "Generate exactly threshold occurrences within lookback window. Deficit SHOULD be flagged.",
+                            "best_for": "Any deficit - tests flagging logic",
                             "rules": rules_df
                         },
                         "threshold_exceeds": {
                             "name": "📈 Exceeds Threshold",
                             "description": "Generate threshold+2 occurrences within lookback window. Tests high-frequency detection.",
-                            "best_for": "Any indicator",
+                            "best_for": "Any deficit",
                             "rules": rules_df
                         },
                         "outside_lookback": {
@@ -142,13 +147,13 @@ Clear operations **permanently delete** data. Use with caution in production env
                         },
                         "near_expiry": {
                             "name": "⚠️ Near Expiry",
-                            "description": "Active indicator within renewal_reminder_days of expiry. Tests renewal alerts.",
+                            "description": "Active deficit flag within renewal_reminder_days of expiry. Tests renewal alerts.",
                             "best_for": "D021 (3-day expiry), D022 (7-day expiry)",
                             "rules": fluctuating_rules
                         },
                         "already_expired": {
                             "name": "❌ Already Expired",
-                            "description": "Occurrences that activated an indicator which has now expired. Tests expiry logic.",
+                            "description": "Occurrences that flagged a deficit which has now expired. Tests expiry logic.",
                             "best_for": "D012 (1-day expiry), D021 (3-day expiry)",
                             "rules": fluctuating_rules
                         }
@@ -171,7 +176,7 @@ Clear operations **permanently delete** data. Use with caution in production env
                     indicator_options = {f"{r['DEFICIT_ID']} - {r['DEFICIT_NAME']} ({r['DEFICIT_TYPE']}, thresh={r['THRESHOLD']}, lookback={r['LOOKBACK_DAYS_HISTORIC']})": r['DEFICIT_ID'] 
                                         for _, r in rule_options.iterrows()}
                     
-                    selected_indicator_label = st.selectbox("Select indicator", list(indicator_options.keys()), key="scenario_indicator")
+                    selected_indicator_label = st.selectbox("Select deficit", list(indicator_options.keys()), key="scenario_indicator")
                     selected_indicator_id = indicator_options[selected_indicator_label]
                     
                     rule_row = rules_df[rules_df['DEFICIT_ID'] == selected_indicator_id].iloc[0]
@@ -186,22 +191,22 @@ Clear operations **permanently delete** data. Use with caution in production env
                         num_occurrences = max(1, threshold - 1)
                         days_ago_start = min(lookback_days - 1, 30)
                         days_ago_end = 0
-                        expected_result = "NOT activate (under threshold)"
+                        expected_result = "NOT flag (under threshold)"
                     elif selected_scenario == "threshold_meets":
                         num_occurrences = threshold
                         days_ago_start = min(lookback_days - 1, 60)
                         days_ago_end = 0
-                        expected_result = "ACTIVATE (meets threshold)"
+                        expected_result = "FLAG (meets threshold)"
                     elif selected_scenario == "threshold_exceeds":
                         num_occurrences = threshold + 2
                         days_ago_start = min(lookback_days - 1, 60)
                         days_ago_end = 0
-                        expected_result = "ACTIVATE (exceeds threshold)"
+                        expected_result = "FLAG (exceeds threshold)"
                     elif selected_scenario == "outside_lookback":
                         num_occurrences = threshold + 1
                         days_ago_start = lookback_days + 30
                         days_ago_end = lookback_days + 1
-                        expected_result = "NOT activate (all outside window)"
+                        expected_result = "NOT flag (all outside window)"
                     elif selected_scenario == "mixed_window":
                         num_occurrences = threshold + 2
                         days_ago_start = lookback_days + 10
@@ -211,7 +216,7 @@ Clear operations **permanently delete** data. Use with caution in production env
                         num_occurrences = threshold
                         days_ago_start = expiry_days - 2 if expiry_days > 2 else 1
                         days_ago_end = expiry_days - 2 if expiry_days > 2 else 1
-                        expected_result = "ACTIVATE then show renewal warning"
+                        expected_result = "FLAG then show renewal warning"
                     elif selected_scenario == "already_expired":
                         num_occurrences = threshold
                         days_ago_start = expiry_days + 10
@@ -293,12 +298,12 @@ Clear operations **permanently delete** data. Use with caution in production env
                         st.text_input("Facility (auto-detected)", value=custom_facility, disabled=True, key="custom_facility_display")
                     
                     with col2:
-                        all_indicators = {f"{r['DEFICIT_ID']} - {r['DEFICIT_NAME']}": r['DEFICIT_ID'] for _, r in rules_df.iterrows()}
-                        custom_indicator_label = st.selectbox("Indicator", list(all_indicators.keys()), key="custom_indicator")
+                    all_indicators = {f"{r['DEFICIT_ID']} - {r['DEFICIT_NAME']}": r['DEFICIT_ID'] for _, r in rules_df.iterrows()}
+                        custom_indicator_label = st.selectbox("Deficit", list(all_indicators.keys()), key="custom_indicator")
                         custom_indicator_id = all_indicators[custom_indicator_label]
                         
                         custom_rule = rules_df[rules_df['DEFICIT_ID'] == custom_indicator_id].iloc[0]
-                        st.caption(f"Type: {custom_rule['DEFICIT_TYPE']} | Threshold: {custom_rule['THRESHOLD']} | Lookback: {custom_rule['LOOKBACK_DAYS_HISTORIC']} | Expiry: {custom_rule['EXPIRY_DAYS']} days")
+                                st.caption(f"Type: {custom_rule['DEFICIT_TYPE']} | Threshold: {custom_rule['THRESHOLD']} | Lookback: {custom_rule['LOOKBACK_DAYS_HISTORIC']} | Expiry: {custom_rule['EXPIRY_DAYS']} days")
                     
                     st.markdown("---")
                     
@@ -380,7 +385,7 @@ Clear operations **permanently delete** data. Use with caution in production env
                     )
                     
                     bulk_indicators = st.multiselect(
-                        "Select indicators",
+                        "Select deficits",
                         options=[f"{r['DEFICIT_ID']} - {r['DEFICIT_NAME']}" for _, r in rules_df.iterrows()],
                         default=[f"{rules_df.iloc[0]['DEFICIT_ID']} - {rules_df.iloc[0]['DEFICIT_NAME']}"],
                         key="bulk_indicators"
@@ -451,7 +456,7 @@ Clear operations **permanently delete** data. Use with caution in production env
                             st.success(f"✅ Created {total_created} occurrences across {resident_id - bulk_resident_start} test residents")
                             st.caption(f"Resident IDs: {bulk_resident_start} to {resident_id - 1}")
                         else:
-                            st.warning("Select at least one scenario and one indicator")
+                            st.warning("Select at least one scenario and one deficit")
             else:
                 st.warning("Could not load indicator rules")
         

@@ -10,6 +10,24 @@
 
 ---
 
+## Terminology
+
+The following terminology aligns with the customer's clinical documentation standards:
+
+| Term | Definition |
+|------|-----------|
+| **Deficit** | A clinical condition being tracked by the DRI system (D001-D032). There are 32 deficits across domains like Chronic Diseases, Geriatric Syndrome, Cognition, Nutrition, etc. |
+| **Occurrence** | Evidence that a deficit may exist - an individual detection event from clinical data. Stored in `DRI_INDICATOR_OCCURRENCES` table. |
+| **Flag** | When a deficit becomes active/confirmed for a resident. Tracked in `DRI_DEFICIT_STATUS` with `DEFICIT_STATUS = 'ACTIVE'`. |
+| **DRI Score** | The Deteriorating Resident Index score: `flagged_deficits / 32`. Stored in `DRI_DEFICIT_SUMMARY`. |
+| **Threshold** | Number of occurrences required to flag a deficit. Defined in `DRI_RULES.RULES_JSON`. |
+| **Lookback Window** | Time period for counting occurrences. Defined in `DRI_RULES.LOOKBACK_DAYS_HISTORIC`. |
+| **Expiry** | Days until a fluctuating deficit flag expires. Defined in `DRI_RULES.EXPIRY_DAYS`. |
+
+**Note on Table Names**: Some database tables retain "INDICATOR" in their names for backward compatibility (e.g., `DRI_INDICATOR_OCCURRENCES`, `DRI_INDICATOR_REJECTIONS`). In these contexts, "indicator" is synonymous with "deficit".
+
+---
+
 ## 1. Environment Configuration
 
 ### 1.1 Database and Schema

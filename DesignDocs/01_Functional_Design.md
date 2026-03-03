@@ -6,9 +6,26 @@ This document defines the functional design for replacing Telstra Health's regex
 
 **Business Problem**: The current system flags ~10% false positives (e.g., "patient's son has asthma" flagged as patient condition). Target is <1% false positives to maintain market position.
 
-**Solution**: Context-aware LLM analysis for indicator detection only, with human-in-the-loop approval, prompt engineering UI, and RAG-enhanced context. DRI score calculation remains a standard deterministic formula for compliance and auditability.
+**Solution**: Context-aware LLM analysis for deficit detection only, with human-in-the-loop approval, prompt engineering UI, and RAG-enhanced context. DRI score calculation remains a standard deterministic formula for compliance and auditability.
 
 **V0.7 Update (28 Jan 2026)**: Clinical rules specification updated with 32 deficits (D001-D032), new overarching rules for new admissions (7-day delay), re-admission gap logic, and cross-deficit dependencies (D019 Cognition depends on D018 Dementia status).
+
+---
+
+## Terminology
+
+The following terminology aligns with the customer's clinical documentation standards:
+
+| Term | Definition |
+|------|-----------|
+| **Deficit** | A clinical condition being tracked by the DRI system (D001-D032). There are 32 deficits across domains like Chronic Diseases, Geriatric Syndrome, Cognition, Nutrition, etc. |
+| **Occurrence** | Evidence that a deficit may exist - an individual detection event from clinical data (progress notes, observations, assessments, medications). |
+| **Flag** | When a deficit becomes active/confirmed for a resident. A deficit is flagged when enough occurrences meet the threshold criteria within the lookback window. |
+| **DRI Score** | The Deteriorating Resident Index score, calculated as: `flagged_deficits / 32`. Ranges from 0.0 to 1.0. |
+| **Severity Band** | Classification based on DRI score: Low (≤0.2), Medium (0.2-0.4), High (0.4-0.6), Very High (>0.6). |
+| **Threshold** | The number of occurrences required to flag a deficit (e.g., Falls requires 2 occurrences in 365 days). |
+| **Lookback Window** | The time period within which occurrences must occur to count toward the threshold (e.g., 90 days, 365 days, or "all" for persistent deficits). |
+| **Expiry** | For fluctuating deficits, the number of days after which a flag automatically expires if not renewed (e.g., Falls expires after 1 day). |
 
 ---
 
