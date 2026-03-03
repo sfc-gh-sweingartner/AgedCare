@@ -285,25 +285,38 @@ if session:
                     regex_time = int((time.time() - regex_start) * 1000)
                     regex_detected_ids = {k for k, v in regex_results.items() if v['detected']}
                 
-                analysis_query = f"""
-                WITH dri_rules AS (
-                    SELECT LISTAGG(DEFICIT_ID || ' - ' || DEFICIT_NAME || ': ' || COALESCE(DEFINITION, ARRAY_TO_STRING(KEYWORDS, ', ')), ' || ') WITHIN GROUP (ORDER BY DEFICIT_ID) as indicators_text
+                rules_query = """
+                    SELECT LISTAGG(
+                        'DEFICIT_ID: ' || DEFICIT_ID || 
+                        '\\nDEFICIT_NAME: ' || DEFICIT_NAME || 
+                        '\\nDEFINITION: ' || COALESCE(DEFINITION, '') ||
+                        '\\nDETECTION_MODE: ' || COALESCE(DETECTION_MODE, 'clinical_reasoning') ||
+                        '\\nCLINICAL_GUIDANCE: ' || COALESCE(CLINICAL_GUIDANCE, '') ||
+                        '\\nINCLUSION_TERMS: ' || COALESCE(ARRAY_TO_STRING(INCLUSION_TERMS, ', '), '') ||
+                        '\\nEXCLUSION_PATTERNS: ' || COALESCE(ARRAY_TO_STRING(EXCLUSION_PATTERNS, ', '), ''),
+                        '\\n\\n'
+                    ) WITHIN GROUP (ORDER BY DEFICIT_ID) as RULES_TEXT
                     FROM AGEDCARE.AGEDCARE.DRI_RULES
                     WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
-                ),
-                prompt_template AS (
-                    SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'
-                )
+                """
+                rules_result = execute_query(rules_query, session)
+                rules_text = rules_result[0]['RULES_TEXT'] if rules_result else ""
+                
+                prompt_query = f"SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'"
+                prompt_result = execute_query(prompt_query, session)
+                prompt_text = prompt_result[0]['PROMPT_TEXT'] if prompt_result else ""
+                
+                full_prompt = prompt_text.replace('{resident_context}', resident_context[:50000]).replace('{rag_indicator_context}', rules_text)
+                escaped_prompt = full_prompt.replace("'", "''")
+                
+                analysis_query = f"""
                 SELECT 
                     SNOWFLAKE.CORTEX.COMPLETE(
                         '{selected_model}',
                         [
                             {{
                                 'role': 'user',
-                                'content': REPLACE(REPLACE(
-                                    (SELECT PROMPT_TEXT FROM prompt_template),
-                                    '{{resident_context}}', '{resident_context.replace("'", "''")[:50000]}'
-                                ), '{{rag_indicator_context}}', (SELECT indicators_text FROM dri_rules))
+                                'content': '{escaped_prompt}'
                             }}
                         ],
                         {{

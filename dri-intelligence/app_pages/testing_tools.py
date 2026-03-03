@@ -298,12 +298,12 @@ Clear operations **permanently delete** data. Use with caution in production env
                         st.text_input("Facility (auto-detected)", value=custom_facility, disabled=True, key="custom_facility_display")
                     
                     with col2:
-                    all_indicators = {f"{r['DEFICIT_ID']} - {r['DEFICIT_NAME']}": r['DEFICIT_ID'] for _, r in rules_df.iterrows()}
+                        all_indicators = {f"{r['DEFICIT_ID']} - {r['DEFICIT_NAME']}": r['DEFICIT_ID'] for _, r in rules_df.iterrows()}
                         custom_indicator_label = st.selectbox("Deficit", list(all_indicators.keys()), key="custom_indicator")
                         custom_indicator_id = all_indicators[custom_indicator_label]
                         
                         custom_rule = rules_df[rules_df['DEFICIT_ID'] == custom_indicator_id].iloc[0]
-                                st.caption(f"Type: {custom_rule['DEFICIT_TYPE']} | Threshold: {custom_rule['THRESHOLD']} | Lookback: {custom_rule['LOOKBACK_DAYS_HISTORIC']} | Expiry: {custom_rule['EXPIRY_DAYS']} days")
+                        st.caption(f"Type: {custom_rule['DEFICIT_TYPE']} | Threshold: {custom_rule['THRESHOLD']} | Lookback: {custom_rule['LOOKBACK_DAYS_HISTORIC']} | Expiry: {custom_rule['EXPIRY_DAYS']} days")
                     
                     st.markdown("---")
                     
