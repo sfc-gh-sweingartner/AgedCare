@@ -45,7 +45,7 @@ if session:
         
         residents = execute_query_df("""
             SELECT DISTINCT RESIDENT_ID 
-            FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+            FROM DRI_LLM_ANALYSIS
             ORDER BY RESIDENT_ID
         """, session)
         
@@ -56,7 +56,7 @@ if session:
         
         batches = execute_query_df("""
             SELECT DISTINCT BATCH_RUN_ID 
-            FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+            FROM DRI_LLM_ANALYSIS
             WHERE BATCH_RUN_ID IS NOT NULL
             ORDER BY BATCH_RUN_ID DESC
         """, session)
@@ -70,7 +70,7 @@ if session:
         st.markdown("**Date range**")
         date_range = execute_query_df("""
             SELECT MIN(ANALYSIS_TIMESTAMP)::DATE as MIN_DATE, MAX(ANALYSIS_TIMESTAMP)::DATE as MAX_DATE
-            FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+            FROM DRI_LLM_ANALYSIS
         """, session)
         
         if date_range is not None and len(date_range) > 0:
@@ -116,7 +116,7 @@ if session:
                 RAW_RESPONSE:summary:indicators_detected::NUMBER as INDICATORS_DETECTED,
                 ARRAY_SIZE(RAW_RESPONSE:indicators) as INDICATOR_COUNT,
                 BATCH_RUN_ID
-            FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+            FROM DRI_LLM_ANALYSIS
             {where_sql}
             ORDER BY ANALYSIS_TIMESTAMP DESC
             LIMIT {limit}

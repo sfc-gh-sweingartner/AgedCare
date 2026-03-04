@@ -58,10 +58,10 @@ This application uses AI (Claude LLM) to detect health indicators in aged care r
     
     @st.cache_data(ttl=60)
     def load_dashboard_metrics(_session):
-        residents = execute_query_df("SELECT COUNT(DISTINCT RESIDENT_ID) as CNT FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES", _session)
-        pending = execute_query_df("SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE WHERE STATUS = 'PENDING'", _session)
-        indicators = execute_query_df("SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_RULES WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE", _session)
-        analyses = execute_query_df("SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS", _session)
+        residents = execute_query_df("SELECT COUNT(DISTINCT RESIDENT_ID) as CNT FROM ACTIVE_RESIDENT_NOTES", _session)
+        pending = execute_query_df("SELECT COUNT(*) as CNT FROM DRI_REVIEW_QUEUE WHERE STATUS = 'PENDING'", _session)
+        indicators = execute_query_df("SELECT COUNT(*) as CNT FROM DRI_RULES WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE", _session)
+        analyses = execute_query_df("SELECT COUNT(*) as CNT FROM DRI_LLM_ANALYSIS", _session)
         return {
             'residents': residents['CNT'].iloc[0] if residents is not None else 0,
             'pending': pending['CNT'].iloc[0] if pending is not None else 0,

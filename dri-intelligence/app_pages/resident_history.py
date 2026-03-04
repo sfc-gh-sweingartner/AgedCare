@@ -40,7 +40,7 @@ This page provides a **complete view of a resident's DRI history**, including:
         SELECT DISTINCT 
                n.RESIDENT_ID, 
                n.SYSTEM_KEY as CLIENT_SYSTEM_KEY
-        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES n
+        FROM ACTIVE_RESIDENT_NOTES n
         ORDER BY n.RESIDENT_ID
     """, session)
     
@@ -56,7 +56,7 @@ This page provides a **complete view of a resident's DRI history**, including:
         decisions = execute_query_df(f"""
             SELECT DEFICIT_ID, DEFICIT_NAME, DECISION_TYPE, DEFICIT_TYPE,
                    DECISION_DATE, EXPIRY_DATE, STATUS, DECISION_REASON, DECIDED_BY
-            FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+            FROM DRI_CLINICAL_DECISIONS
             WHERE RESIDENT_ID = {selected_resident}
             ORDER BY DECISION_DATE DESC
         """, session)
@@ -156,16 +156,16 @@ This page provides a **complete view of a resident's DRI history**, including:
             occurrences = execute_query_df(f"""
                 SELECT OCCURRENCE_ID, DEFICIT_ID, DEFICIT_NAME, OCCURRENCE_DATE,
                        SOURCE_TABLE, EVIDENCE_TEXT, APPROVED_BY, APPROVAL_DATE
-                FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES
+                FROM DRI_INDICATOR_OCCURRENCES
                 WHERE RESIDENT_ID = {selected_resident}
                 ORDER BY OCCURRENCE_DATE DESC, APPROVAL_DATE DESC
             """, session)
             
             rules_data = execute_query_df("""
                 SELECT DEFICIT_ID, DEFICIT_TYPE, 
-                       COALESCE(LOOKBACK_DAYS_HISTORIC, 365) as LOOKBACK_DAYS,
+                       LOOKBACK_DAYS_HISTORIC as LOOKBACK_DAYS,
                        RULES_JSON
-                FROM AGEDCARE.AGEDCARE.DRI_RULES
+                FROM DRI_RULES
                 WHERE IS_CURRENT_VERSION = TRUE
             """, session)
             
@@ -178,7 +178,10 @@ This page provides a **complete view of a resident's DRI history**, including:
                         threshold = rules_json[0].get('threshold', 1) if isinstance(rules_json[0], dict) else 1
                     if threshold > 1:
                         lb = r['LOOKBACK_DAYS']
-                        lookback = 9999 if lb == 'all' or lb is None else int(lb)
+                        try:
+                            lookback = 9999 if lb is None or str(lb).lower() == 'all' else int(lb)
+                        except (ValueError, TypeError):
+                            lookback = 9999
                         threshold_rules[r['DEFICIT_ID']] = {
                             'threshold': threshold,
                             'lookback_days': lookback
@@ -245,7 +248,7 @@ This page provides a **complete view of a resident's DRI history**, including:
                        DETAILS_JSON:indicators_activated::INT as ACTIVATED,
                        DETAILS_JSON:indicators_expired::INT as EXPIRED,
                        RUN_TYPE
-                FROM AGEDCARE.AGEDCARE.DRI_PROCESSOR_RUNS
+                FROM DRI_PROCESSOR_RUNS
                 WHERE RESIDENT_ID = {selected_resident}
                 OR (RESIDENT_ID IS NULL AND RUN_TYPE = 'TIME')
                 ORDER BY RUN_TIMESTAMP DESC
@@ -254,7 +257,7 @@ This page provides a **complete view of a resident's DRI history**, including:
             
             score_history = execute_query_df(f"""
                 SELECT LOAD_TIMESTAMP as DATE, DRI_SCORE, SEVERITY_BAND
-                FROM AGEDCARE.AGEDCARE.DRI_DEFICIT_SUMMARY
+                FROM DRI_DEFICIT_SUMMARY
                 WHERE RESIDENT_ID = {selected_resident}
                 ORDER BY LOAD_TIMESTAMP DESC
                 LIMIT 30
@@ -293,7 +296,7 @@ This page provides a **complete view of a resident's DRI history**, including:
                     END as EVENT_TYPE,
                     DEFICIT_ID || ' - ' || DEFICIT_NAME as DESCRIPTION,
                     DECIDED_BY as ACTOR
-                FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                FROM DRI_CLINICAL_DECISIONS
                 WHERE RESIDENT_ID = {selected_resident}
                 
                 UNION ALL
@@ -303,7 +306,7 @@ This page provides a **complete view of a resident's DRI history**, including:
                     '📝 Occurrence' as EVENT_TYPE,
                     DEFICIT_ID || ' - ' || DEFICIT_NAME as DESCRIPTION,
                     APPROVED_BY as ACTOR
-                FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES
+                FROM DRI_INDICATOR_OCCURRENCES
                 WHERE RESIDENT_ID = {selected_resident}
                 
                 ORDER BY EVENT_DATE DESC
@@ -323,7 +326,7 @@ This page provides a **complete view of a resident's DRI history**, including:
             analyses = execute_query_df(f"""
                 SELECT ANALYSIS_ID, ANALYSIS_TIMESTAMP, MODEL_USED, PROMPT_VERSION, 
                        PROCESSING_TIME_MS, BATCH_RUN_ID
-                FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+                FROM DRI_LLM_ANALYSIS
                 WHERE RESIDENT_ID = {selected_resident}
                 ORDER BY ANALYSIS_TIMESTAMP DESC
                 LIMIT 20
@@ -337,7 +340,7 @@ This page provides a **complete view of a resident's DRI history**, including:
                         st.write(f"**Batch ID:** {analysis['BATCH_RUN_ID']}")
                         
                         raw = execute_query(f"""
-                            SELECT RAW_RESPONSE FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+                            SELECT RAW_RESPONSE FROM DRI_LLM_ANALYSIS
                             WHERE ANALYSIS_ID = '{analysis['ANALYSIS_ID']}'
                         """, session)
                         

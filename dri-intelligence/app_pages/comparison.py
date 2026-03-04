@@ -161,7 +161,7 @@ if session:
     with cfg_col1:
         residents = execute_query_df("""
             SELECT DISTINCT RESIDENT_ID 
-            FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES
+            FROM ACTIVE_RESIDENT_NOTES
             ORDER BY RESIDENT_ID
         """, session)
         
@@ -191,7 +191,7 @@ if session:
     with cfg_col3:
         prompt_versions = execute_query_df("""
             SELECT VERSION_NUMBER, IS_ACTIVE 
-            FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS
+            FROM DRI_PROMPT_VERSIONS
             ORDER BY CREATED_TIMESTAMP DESC
         """, session)
         
@@ -207,19 +207,19 @@ if session:
         preview_query = f"""
             WITH notes AS (
                 SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
-                FROM (SELECT PROGRESS_NOTE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 15)
+                FROM (SELECT PROGRESS_NOTE, EVENT_DATE FROM ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 15)
             ),
             meds AS (
                 SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as txt
-                FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
+                FROM ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
             ),
             obs AS (
                 SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
-                FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
+                FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC LIMIT 30)
             ),
             forms AS (
                 SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 300), ' | ') as txt
-                FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} AND RESPONSE IS NOT NULL AND TRIM(RESPONSE) != ''
+                FROM ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} AND RESPONSE IS NOT NULL AND TRIM(RESPONSE) != ''
             )
             SELECT 
                 'PROGRESS NOTES:\n' || COALESCE((SELECT txt FROM notes), 'None') ||
@@ -245,19 +245,19 @@ if session:
                 context_query = f"""
                 WITH resident_notes AS (
                     SELECT LISTAGG(LEFT(PROGRESS_NOTE, 500) || ' [' || NOTE_TYPE || ']', ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC NULLS LAST) as notes_text
-                    FROM (SELECT PROGRESS_NOTE, NOTE_TYPE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC NULLS LAST LIMIT 20)
+                    FROM (SELECT PROGRESS_NOTE, NOTE_TYPE, EVENT_DATE FROM ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC NULLS LAST LIMIT 20)
                 ),
                 resident_meds AS (
                     SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as meds_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
+                    FROM ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {selected_resident}
                 ),
                 resident_obs AS (
                     SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 200), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC NULLS LAST) as obs_text
-                    FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC NULLS LAST LIMIT 40)
+                    FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {selected_resident} ORDER BY EVENT_DATE DESC NULLS LAST LIMIT 40)
                 ),
                 resident_forms AS (
                     SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 400), ' | ') as forms_text
-                    FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} AND RESPONSE IS NOT NULL AND TRIM(RESPONSE) != ''
+                    FROM ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {selected_resident} AND RESPONSE IS NOT NULL AND TRIM(RESPONSE) != ''
                 )
                 SELECT 
                     'PROGRESS NOTES: ' || (SELECT notes_text FROM resident_notes) ||
@@ -270,7 +270,7 @@ if session:
                 
                 keyword_df = execute_query_df("""
                     SELECT DRI_DEFICIT_ID, DEFICIT_NAME, KEYWORDS
-                    FROM AGEDCARE.AGEDCARE.DRI_KEYWORD_MASTER_LIST
+                    FROM DRI_KEYWORD_MASTER_LIST
                     ORDER BY DRI_DEFICIT_ID
                 """, session)
                 
@@ -296,13 +296,13 @@ if session:
                         '\\nEXCLUSION_PATTERNS: ' || COALESCE(EXCLUSION_PATTERNS, ''),
                         '\\n\\n'
                     ) WITHIN GROUP (ORDER BY DEFICIT_ID) as RULES_TEXT
-                    FROM AGEDCARE.AGEDCARE.DRI_RULES
+                    FROM DRI_RULES
                     WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
                 """
                 rules_result = execute_query(rules_query, session)
                 rules_text = rules_result[0]['RULES_TEXT'] if rules_result else ""
                 
-                prompt_query = f"SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'"
+                prompt_query = f"SELECT PROMPT_TEXT FROM DRI_PROMPT_VERSIONS WHERE VERSION_NUMBER = '{selected_version}'"
                 prompt_result = execute_query(prompt_query, session)
                 prompt_text = prompt_result[0]['PROMPT_TEXT'] if prompt_result else ""
                 
@@ -535,7 +535,7 @@ if session:
     with col_f2:
         with st.container(border=True):
             indicator_count = execute_query_df("""
-                SELECT COUNT(*) as COUNT FROM AGEDCARE.AGEDCARE.DRI_RULES WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
+                SELECT COUNT(*) as COUNT FROM DRI_RULES WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
             """, session)
             
             if indicator_count is not None and len(indicator_count) > 0:

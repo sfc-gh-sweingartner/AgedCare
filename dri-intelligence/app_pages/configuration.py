@@ -61,7 +61,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                    MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN DEFICIT_NAME END) as DEFICIT_NAME,
                    MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN DOMAIN END) as DOMAIN,
                    MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN VERSION_NUMBER END) as LATEST_VERSION
-            FROM AGEDCARE.AGEDCARE.DRI_RULES
+            FROM DRI_RULES
             GROUP BY DEFICIT_ID
             ORDER BY DEFICIT_ID
         """, session)
@@ -78,7 +78,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                 selected_deficit = deficit_options[selected_deficit_display]
             
             deficit_row_query = execute_query(f"""
-                SELECT * FROM AGEDCARE.AGEDCARE.DRI_RULES 
+                SELECT * FROM DRI_RULES 
                 WHERE DEFICIT_ID = '{selected_deficit}' AND IS_CURRENT_VERSION = TRUE
             """, session)
             
@@ -337,7 +337,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                                     lookback_delta = deficit_row['LOOKBACK_DAYS_DELTA'] if deficit_row['LOOKBACK_DAYS_DELTA'] is not None else 1
                                     
                                     execute_query(f"""
-                                        INSERT INTO AGEDCARE.AGEDCARE.DRI_RULES (
+                                        INSERT INTO DRI_RULES (
                                             VERSION_NUMBER, VERSION_DESCRIPTION, IS_CURRENT_VERSION,
                                             DEFICIT_NUMBER, DEFICIT_ID, DOMAIN, DEFICIT_NAME, DEFICIT_TYPE,
                                             EXPIRY_DAYS, LOOKBACK_DAYS_HISTORIC, LOOKBACK_DAYS_DELTA,
@@ -354,7 +354,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                                     """, session)
                                     
                                     execute_query(f"""
-                                        UPDATE AGEDCARE.AGEDCARE.DRI_RULES 
+                                        UPDATE DRI_RULES 
                                         SET IS_CURRENT_VERSION = FALSE 
                                         WHERE DEFICIT_ID = '{selected_deficit}' AND VERSION_NUMBER != '{next_version}'
                                     """, session)
@@ -470,7 +470,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
             
             all_versions = execute_query_df(f"""
                 SELECT VERSION_NUMBER, VERSION_DESCRIPTION, CREATED_BY, CREATED_TIMESTAMP
-                FROM AGEDCARE.AGEDCARE.DRI_RULES
+                FROM DRI_RULES
                 WHERE DEFICIT_ID = '{selected_deficit}'
                 ORDER BY CREATED_TIMESTAMP DESC
             """, session)
@@ -486,7 +486,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
         
         clients = execute_query_df("""
             SELECT CONFIG_ID, CLIENT_SYSTEM_KEY, CLIENT_NAME, IS_ACTIVE
-            FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG
+            FROM DRI_CLIENT_CONFIG
             ORDER BY CLIENT_NAME
         """, session)
         
@@ -511,7 +511,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                     CONFIG_JSON:production_settings:prompt_version::VARCHAR as PROD_PROMPT_VERSION,
                     CONFIG_JSON:production_settings:batch_schedule::VARCHAR as BATCH_SCHEDULE,
                     CONFIG_JSON:client_settings:context_threshold::NUMBER as CONTEXT_THRESHOLD
-                FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
+                FROM DRI_CLIENT_CONFIG 
                 WHERE CONFIG_ID = '{selected_config_id}'
             """, session)
             
@@ -539,14 +539,14 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                 SELECT DEFICIT_ID, 
                        MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN DEFICIT_NAME END) as DEFICIT_NAME,
                        VERSION_NUMBER, VERSION_DESCRIPTION, CREATED_TIMESTAMP
-                FROM AGEDCARE.AGEDCARE.DRI_RULES
+                FROM DRI_RULES
                 GROUP BY DEFICIT_ID, VERSION_NUMBER, VERSION_DESCRIPTION, CREATED_TIMESTAMP
                 ORDER BY DEFICIT_ID, CREATED_TIMESTAMP DESC
             """, session)
             
             client_assignments = execute_query_df(f"""
                 SELECT DEFICIT_ID, RULE_VERSION
-                FROM AGEDCARE.AGEDCARE.DRI_CLIENT_RULE_ASSIGNMENTS
+                FROM DRI_CLIENT_RULE_ASSIGNMENTS
                 WHERE CLIENT_SYSTEM_KEY = '{selected_client_key}'
             """, session)
             
@@ -617,7 +617,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
             
             prompt_versions = execute_query_df("""
                 SELECT VERSION_NUMBER, DESCRIPTION, PROMPT_TEXT, IS_ACTIVE, CREATED_TIMESTAMP
-                FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS
+                FROM DRI_PROMPT_VERSIONS
                 ORDER BY CREATED_TIMESTAMP DESC
             """, session)
             
@@ -699,7 +699,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                 SELECT 
                     CONFIG_JSON:processing_settings:time_processor_schedule::VARCHAR as TIME_SCHEDULE,
                     CONFIG_JSON:processing_settings:time_processor_enabled::BOOLEAN as TIME_ENABLED
-                FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
+                FROM DRI_CLIENT_CONFIG 
                 WHERE CONFIG_ID = '{selected_config_id}'
             """, session)
             
@@ -732,7 +732,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
             
             last_runs = execute_query_df("""
                 SELECT RUN_TYPE, MAX(RUN_TIMESTAMP) as LAST_RUN, MAX(RUN_STATUS) as STATUS
-                FROM AGEDCARE.AGEDCARE.DRI_PROCESSOR_RUNS
+                FROM DRI_PROCESSOR_RUNS
                 GROUP BY RUN_TYPE
                 ORDER BY RUN_TYPE
             """, session)
@@ -753,7 +753,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                     with st.spinner("Running Time Processor..."):
                         try:
                             result = execute_query(f"""
-                                CALL AGEDCARE.AGEDCARE.DRI_TIME_PROCESSOR('{selected_client_key}', 'MANUAL')
+                                CALL DRI_TIME_PROCESSOR('{selected_client_key}', 'MANUAL')
                             """, session)
                             if result:
                                 result_data = result[0][0] if result[0] else {}
@@ -773,7 +773,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                         SELECT RUN_ID, RUN_TYPE, TRIGGERED_BY, RUN_TIMESTAMP, 
                                INDICATORS_ACTIVATED, INDICATORS_EXPIRED, OCCURRENCES_LOGGED,
                                RESIDENTS_AFFECTED, RUN_DURATION_MS, RUN_STATUS
-                        FROM AGEDCARE.AGEDCARE.DRI_PROCESSOR_RUNS
+                        FROM DRI_PROCESSOR_RUNS
                         ORDER BY RUN_TIMESTAMP DESC
                         LIMIT 20
                     """, session)
@@ -788,7 +788,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                     escaped_prompt = prompt_text_display.replace("'", "''").replace("\\", "\\\\") if 'prompt_text_display' in dir() else ''
                     prompt_ver = selected_prompt_version if 'selected_prompt_version' in dir() else prod_prompt_version
                     execute_query(f"""
-                        UPDATE AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
+                        UPDATE DRI_CLIENT_CONFIG 
                         SET CONFIG_JSON = OBJECT_INSERT(
                             OBJECT_INSERT(
                                 OBJECT_INSERT(
@@ -821,7 +821,7 @@ The DRI system uses four **detection modes** to identify deficit indicators:
                     updated_assignments = st.session_state.get('updated_rule_assignments', {})
                     for deficit_id, rule_version in updated_assignments.items():
                         execute_query(f"""
-                            MERGE INTO AGEDCARE.AGEDCARE.DRI_CLIENT_RULE_ASSIGNMENTS t
+                            MERGE INTO DRI_CLIENT_RULE_ASSIGNMENTS t
                             USING (SELECT '{selected_client_key}' as CLIENT_SYSTEM_KEY, '{deficit_id}' as DEFICIT_ID, '{rule_version}' as RULE_VERSION) s
                             ON t.CLIENT_SYSTEM_KEY = s.CLIENT_SYSTEM_KEY AND t.DEFICIT_ID = s.DEFICIT_ID
                             WHEN MATCHED THEN UPDATE SET RULE_VERSION = s.RULE_VERSION, MODIFIED_BY = CURRENT_USER(), MODIFIED_TIMESTAMP = CURRENT_TIMESTAMP()

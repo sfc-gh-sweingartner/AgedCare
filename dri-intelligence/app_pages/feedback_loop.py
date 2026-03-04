@@ -57,7 +57,7 @@ if session:
     with col_filter1:
         prompt_versions = execute_query_df("""
             SELECT DISTINCT PROMPT_VERSION 
-            FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+            FROM DRI_LLM_ANALYSIS
             WHERE PROMPT_VERSION IS NOT NULL
             ORDER BY PROMPT_VERSION DESC
         """, session)
@@ -75,7 +75,7 @@ if session:
     with col_filter2:
         facilities = execute_query_df("""
             SELECT DISTINCT CLIENT_SYSTEM_KEY 
-            FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE
+            FROM DRI_REVIEW_QUEUE
             WHERE CLIENT_SYSTEM_KEY IS NOT NULL
             ORDER BY CLIENT_SYSTEM_KEY
         """, session)
@@ -122,7 +122,7 @@ if session:
             ACCEPTED_COUNT,
             REJECTED_COUNT,
             REJECTION_RATE_PCT
-        FROM AGEDCARE.AGEDCARE.V_INDICATOR_REVIEW_STATS
+        FROM V_INDICATOR_REVIEW_STATS
         {where_sql}
         ORDER BY REJECTION_RATE_PCT DESC, TOTAL_REVIEWS DESC
     """, session)
@@ -175,8 +175,8 @@ if session:
                             ir.REJECTED_BY,
                             ir.REJECTED_TIMESTAMP,
                             rq.RESIDENT_ID
-                        FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS ir
-                        JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
+                        FROM DRI_INDICATOR_REJECTIONS ir
+                        JOIN DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
                         WHERE ir.INDICATOR_ID = '{row['INDICATOR_ID']}'
                         UNION ALL
                         SELECT 
@@ -184,7 +184,7 @@ if session:
                             cd.DECIDED_BY as REJECTED_BY,
                             cd.DECISION_DATE as REJECTED_TIMESTAMP,
                             cd.RESIDENT_ID
-                        FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS cd
+                        FROM DRI_CLINICAL_DECISIONS cd
                         WHERE cd.DEFICIT_ID = '{row['INDICATOR_ID']}'
                         AND cd.DECISION_TYPE = 'REJECTED'
                         AND cd.STATUS = 'ACTIVE'
@@ -224,9 +224,9 @@ if session:
                 lla.RAW_RESPONSE,
                 lla.PROMPT_VERSION,
                 rq.CLIENT_SYSTEM_KEY
-            FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS ir
-            JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
-            JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+            FROM DRI_INDICATOR_REJECTIONS ir
+            JOIN DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
+            JOIN DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
             UNION ALL
             SELECT 
                 cd.DEFICIT_ID as INDICATOR_ID,
@@ -238,9 +238,9 @@ if session:
                 lla.RAW_RESPONSE,
                 lla.PROMPT_VERSION,
                 rq.CLIENT_SYSTEM_KEY
-            FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS cd
-            LEFT JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON rq.RESIDENT_ID = cd.RESIDENT_ID
-            LEFT JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+            FROM DRI_CLINICAL_DECISIONS cd
+            LEFT JOIN DRI_REVIEW_QUEUE rq ON rq.RESIDENT_ID = cd.RESIDENT_ID
+            LEFT JOIN DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
             WHERE cd.DECISION_TYPE = 'REJECTED'
             AND cd.STATUS = 'ACTIVE'
         )
@@ -342,7 +342,7 @@ Return ONLY valid JSON array, no other text."""
         dri_rules = execute_query("""
             SELECT DEFICIT_ID, DEFICIT_NAME, DEFINITION, DEFICIT_TYPE, 
                    EXPIRY_DAYS, KEYWORDS_TO_SEARCH
-            FROM AGEDCARE.AGEDCARE.DRI_RULES
+            FROM DRI_RULES
             WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
             ORDER BY DEFICIT_ID
         """, session)
@@ -397,9 +397,9 @@ Return ONLY valid JSON array, no other text."""
                     ir.REJECTED_TIMESTAMP,
                     lla.PROMPT_VERSION,
                     rq.CLIENT_SYSTEM_KEY
-                FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS ir
-                JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
-                JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
+                FROM DRI_INDICATOR_REJECTIONS ir
+                JOIN DRI_REVIEW_QUEUE rq ON ir.QUEUE_ID = rq.QUEUE_ID
+                JOIN DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
                 LATERAL FLATTEN(input => lla.RAW_RESPONSE:indicators) f
                 WHERE f.value:deficit_id::STRING = ir.INDICATOR_ID
                 UNION ALL
@@ -414,9 +414,9 @@ Return ONLY valid JSON array, no other text."""
                     cd.DECISION_DATE as REJECTED_TIMESTAMP,
                     lla.PROMPT_VERSION,
                     rq.CLIENT_SYSTEM_KEY
-                FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS cd
-                LEFT JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON rq.RESIDENT_ID = cd.RESIDENT_ID
-                LEFT JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
+                FROM DRI_CLINICAL_DECISIONS cd
+                LEFT JOIN DRI_REVIEW_QUEUE rq ON rq.RESIDENT_ID = cd.RESIDENT_ID
+                LEFT JOIN DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID,
                 LATERAL FLATTEN(input => lla.RAW_RESPONSE:indicators) f
                 WHERE cd.DECISION_TYPE = 'REJECTED'
                 AND cd.STATUS = 'ACTIVE'

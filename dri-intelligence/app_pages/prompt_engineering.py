@@ -69,7 +69,7 @@ The prompt template includes these variables that get replaced at runtime:
 def load_residents_with_facility(_session):
     return execute_query_df("""
         SELECT DISTINCT n.RESIDENT_ID, n.SYSTEM_KEY as FACILITY_KEY
-        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES n
+        FROM ACTIVE_RESIDENT_NOTES n
         WHERE n.SYSTEM_KEY IS NOT NULL
         ORDER BY n.RESIDENT_ID
     """, _session)
@@ -81,7 +81,7 @@ def load_production_settings(_session, facility_key):
             CONFIG_JSON:production_settings:prompt_version::VARCHAR as PROMPT_VERSION,
             CONFIG_JSON:production_settings:model::VARCHAR as MODEL,
             CONFIG_JSON:client_settings:context_threshold::NUMBER as CONTEXT_THRESHOLD
-        FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
+        FROM DRI_CLIENT_CONFIG 
         WHERE CLIENT_SYSTEM_KEY = '{facility_key}' AND IS_ACTIVE = TRUE
         LIMIT 1
     """, _session)
@@ -91,7 +91,7 @@ def load_production_settings(_session, facility_key):
                 CONFIG_JSON:production_settings:prompt_version::VARCHAR as PROMPT_VERSION,
                 CONFIG_JSON:production_settings:model::VARCHAR as MODEL,
                 CONFIG_JSON:client_settings:context_threshold::NUMBER as CONTEXT_THRESHOLD
-            FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
+            FROM DRI_CLIENT_CONFIG 
             WHERE IS_ACTIVE = TRUE
             LIMIT 1
         """, _session)
@@ -101,7 +101,7 @@ def load_production_settings(_session, facility_key):
 def load_prompt_versions(_session):
     return execute_query_df("""
         SELECT VERSION_NUMBER, IS_ACTIVE, DESCRIPTION, CREATED_TIMESTAMP
-        FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS
+        FROM DRI_PROMPT_VERSIONS
         ORDER BY CREATED_TIMESTAMP DESC
     """, _session)
 
@@ -109,7 +109,7 @@ def load_prompt_versions(_session):
 def load_prompt_text(version, _session):
     return execute_query_df(f"""
         SELECT PROMPT_TEXT 
-        FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS
+        FROM DRI_PROMPT_VERSIONS
         WHERE VERSION_NUMBER = '{version}'
     """, _session)
 
@@ -117,7 +117,7 @@ def load_prompt_text(version, _session):
 def load_client_rule_assignments(_session, facility_key):
     return execute_query_df(f"""
         SELECT DEFICIT_ID, RULE_VERSION
-        FROM AGEDCARE.AGEDCARE.DRI_CLIENT_RULE_ASSIGNMENTS
+        FROM DRI_CLIENT_RULE_ASSIGNMENTS
         WHERE CLIENT_SYSTEM_KEY = '{facility_key}'
     """, _session)
 
@@ -127,7 +127,7 @@ def load_all_rule_versions(_session):
         SELECT DEFICIT_ID, 
                MAX(CASE WHEN IS_CURRENT_VERSION = TRUE THEN DEFICIT_NAME END) as DEFICIT_NAME,
                VERSION_NUMBER
-        FROM AGEDCARE.AGEDCARE.DRI_RULES
+        FROM DRI_RULES
         GROUP BY DEFICIT_ID, VERSION_NUMBER
         ORDER BY DEFICIT_ID, VERSION_NUMBER DESC
     """, _session)
@@ -140,20 +140,20 @@ def load_deficit_context(_session, resident_id):
                COALESCE(RULES_JSON[0]:threshold::NUMBER, 1) as THRESHOLD,
                CASE WHEN LOOKBACK_DAYS_HISTORIC = 'all' OR LOOKBACK_DAYS_HISTORIC IS NULL THEN 9999 
                ELSE TRY_TO_NUMBER(LOOKBACK_DAYS_HISTORIC) END as LOOKBACK_DAYS
-        FROM AGEDCARE.AGEDCARE.DRI_RULES
+        FROM DRI_RULES
         WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
     """, _session)
     
     occurrences = execute_query_df(f"""
         SELECT DEFICIT_ID, OCCURRENCE_DATE, EVIDENCE_TEXT
-        FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES
+        FROM DRI_INDICATOR_OCCURRENCES
         WHERE RESIDENT_ID = {resident_id}
         ORDER BY DEFICIT_ID, OCCURRENCE_DATE DESC
     """, _session)
     
     active_flags = execute_query_df(f"""
         SELECT DEFICIT_ID, DECISION_TYPE, EXPIRY_DATE, DECISION_DATE
-        FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+        FROM DRI_CLINICAL_DECISIONS
         WHERE RESIDENT_ID = {resident_id} AND STATUS = 'ACTIVE' AND DECISION_TYPE = 'CONFIRMED'
     """, _session)
     
@@ -200,27 +200,27 @@ def load_resident_context(_session, resident_id):
     context_query = f"""
         WITH notes AS (
             SELECT LISTAGG(LEFT(PROGRESS_NOTE, 400) || ' [' || NOTE_TYPE || ']', ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
-            FROM (SELECT PROGRESS_NOTE, NOTE_TYPE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {resident_id} ORDER BY EVENT_DATE DESC LIMIT 15)
+            FROM (SELECT PROGRESS_NOTE, NOTE_TYPE, EVENT_DATE FROM ACTIVE_RESIDENT_NOTES WHERE RESIDENT_ID = {resident_id} ORDER BY EVENT_DATE DESC LIMIT 15)
         ),
         meds AS (
             SELECT LISTAGG(MED_NAME || ' (' || MED_STATUS || ')', ', ') as txt
-            FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {resident_id}
+            FROM ACTIVE_RESIDENT_MEDICATION WHERE RESIDENT_ID = {resident_id}
         ),
         obs AS (
             SELECT LISTAGG(CHART_NAME || ': ' || LEFT(OBSERVATION_VALUE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
-            FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {resident_id} ORDER BY EVENT_DATE DESC LIMIT 30)
+            FROM (SELECT CHART_NAME, OBSERVATION_VALUE, EVENT_DATE FROM ACTIVE_RESIDENT_OBSERVATIONS WHERE RESIDENT_ID = {resident_id} ORDER BY EVENT_DATE DESC LIMIT 30)
         ),
         forms AS (
             SELECT LISTAGG(FORM_NAME || ': ' || ELEMENT_NAME || '=' || LEFT(RESPONSE, 100), ' | ') WITHIN GROUP (ORDER BY EVENT_DATE DESC) as txt
-            FROM (SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {resident_id} ORDER BY EVENT_DATE DESC LIMIT 20)
+            FROM (SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE FROM ACTIVE_RESIDENT_ASSESSMENT_FORMS WHERE RESIDENT_ID = {resident_id} ORDER BY EVENT_DATE DESC LIMIT 20)
         ),
         medical_profile AS (
             SELECT COALESCE(SPECIAL_NEEDS, '') || ' | Allergies: ' || COALESCE(ALLERGIES, 'None') || ' | Diet: ' || COALESCE(DIET, 'Standard') as txt
-            FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {resident_id}
+            FROM ACTIVE_RESIDENT_MEDICAL_PROFILE WHERE RESIDENT_ID = {resident_id}
         ),
         obs_groups AS (
             SELECT LISTAGG(CHART_NAME || ' (' || OBSERVATION_STATUS || '): ' || COALESCE(OBSERVATION_TYPE, '') || ' - ' || COALESCE(OBSERVATION_LOCATION, '') || ' - ' || COALESCE(OBSERVATION_DESCRIPTION, ''), ' | ') as txt
-            FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {resident_id}
+            FROM ACTIVE_RESIDENT_OBSERVATION_GROUP WHERE RESIDENT_ID = {resident_id}
         )
         SELECT 
             'MEDICAL PROFILE (DIAGNOSES - PRIMARY SOURCE): ' || COALESCE((SELECT txt FROM medical_profile), 'None') ||
@@ -450,7 +450,7 @@ if session:
                     '\\nRULES_JSON: ' || COALESCE(TO_VARCHAR(RULES_JSON), '[]'),
                     '\\n\\n'
                 ) WITHIN GROUP (ORDER BY DEFICIT_ID) as RULES_TEXT
-                FROM AGEDCARE.AGEDCARE.DRI_RULES
+                FROM DRI_RULES
                 WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
             """
             rules_result = execute_query(rules_query, session)
@@ -489,7 +489,7 @@ if session:
         new_description = st.text_input("Version description", value="Updated prompt")
     with col_save2:
         max_version = execute_query("""
-            SELECT MAX(VERSION_NUMBER) as MAX_VER FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS 
+            SELECT MAX(VERSION_NUMBER) as MAX_VER FROM DRI_PROMPT_VERSIONS 
             WHERE VERSION_NUMBER LIKE 'v%'
         """, session)
         if max_version and max_version[0]['MAX_VER']:
@@ -503,7 +503,7 @@ if session:
             escaped_prompt = edited_prompt.replace("'", "''")
             try:
                 execute_query(f"""
-                    INSERT INTO AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS 
+                    INSERT INTO DRI_PROMPT_VERSIONS 
                     (VERSION_NUMBER, PROMPT_TEXT, DESCRIPTION, CREATED_BY, IS_ACTIVE)
                     VALUES ('{next_version}', '{escaped_prompt}', '{new_description}', 'user', FALSE)
                 """, session)
@@ -544,7 +544,7 @@ if session:
                         '\\nRULES_JSON: ' || COALESCE(TO_VARCHAR(RULES_JSON), '[]'),
                         '\\n\\n'
                     ) WITHIN GROUP (ORDER BY DEFICIT_ID) as RULES_TEXT
-                    FROM AGEDCARE.AGEDCARE.DRI_RULES
+                    FROM DRI_RULES
                     WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
                 """
                 rules_result = execute_query(rules_query, session)

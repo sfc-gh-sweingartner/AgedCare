@@ -14,9 +14,10 @@ def get_snowflake_session():
             session = Session.builder.configs({
                 "connection_name": os.getenv("SNOWFLAKE_CONNECTION_NAME", "DEMO_SWEINGARTNER")
             }).create()
-        
-        session.sql("USE DATABASE AGEDCARE").collect()
-        session.sql("USE SCHEMA AGEDCARE").collect()
+            db = os.getenv("DRI_DATABASE", "AGEDCARE")
+            schema = os.getenv("DRI_SCHEMA", "AGEDCARE")
+            session.sql(f"USE DATABASE {db}").collect()
+            session.sql(f"USE SCHEMA {schema}").collect()
         
         st.session_state.snowflake_session = session
         return session

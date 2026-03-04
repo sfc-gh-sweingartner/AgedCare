@@ -11,12 +11,12 @@ def run_llm_analysis(session, resident_id: int, client_system_key: str, prompt_v
     
     if prompt_version:
         prompt_result = session.sql(f"""
-            SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS 
+            SELECT PROMPT_TEXT FROM DRI_PROMPT_VERSIONS 
             WHERE VERSION_NUMBER = '{prompt_version}'
         """).collect()
     else:
         prompt_result = session.sql("""
-            SELECT PROMPT_TEXT FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS 
+            SELECT PROMPT_TEXT FROM DRI_PROMPT_VERSIONS 
             WHERE IS_ACTIVE = TRUE LIMIT 1
         """).collect()
     
@@ -26,7 +26,7 @@ def run_llm_analysis(session, resident_id: int, client_system_key: str, prompt_v
     prompt_template = prompt_result[0]['PROMPT_TEXT']
     
     config_result = session.sql(f"""
-        SELECT CONFIG_JSON FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG 
+        SELECT CONFIG_JSON FROM DRI_CLIENT_CONFIG 
         WHERE CLIENT_SYSTEM_KEY = '{client_system_key}' AND IS_ACTIVE = TRUE
     """).collect()
     
@@ -75,7 +75,7 @@ def run_llm_analysis(session, resident_id: int, client_system_key: str, prompt_v
             
             escaped_json = json_str.replace("'", "''").replace("\\", "\\\\")
             session.sql(f"""
-                INSERT INTO AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
+                INSERT INTO DRI_LLM_ANALYSIS 
                 (RESIDENT_ID, CLIENT_SYSTEM_KEY, MODEL_USED, PROMPT_VERSION, RAW_RESPONSE, PROCESSING_TIME_MS)
                 SELECT 
                     {resident_id},
@@ -98,7 +98,7 @@ def get_resident_context(session, resident_id: int, max_notes: int = 15, max_obs
     
     notes = session.sql(f"""
         SELECT PROGRESS_NOTE, EVENT_DATE, ENTERED_BY_USER, NOTE_TYPE
-        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES 
+        FROM ACTIVE_RESIDENT_NOTES 
         WHERE RESIDENT_ID = {resident_id}
         ORDER BY EVENT_DATE DESC
         LIMIT {max_notes}
@@ -114,7 +114,7 @@ def get_resident_context(session, resident_id: int, max_notes: int = 15, max_obs
     
     meds = session.sql(f"""
         SELECT MED_NAME, MED_ROUTE, MED_STATUS, MED_START_DATE
-        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION 
+        FROM ACTIVE_RESIDENT_MEDICATION 
         WHERE RESIDENT_ID = {resident_id}
         LIMIT 20
     """).collect()
@@ -126,7 +126,7 @@ def get_resident_context(session, resident_id: int, max_notes: int = 15, max_obs
     
     obs = session.sql(f"""
         SELECT CHART_NAME, CHART_LABEL, OBSERVATION_VALUE, EVENT_DATE
-        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS 
+        FROM ACTIVE_RESIDENT_OBSERVATIONS 
         WHERE RESIDENT_ID = {resident_id}
         ORDER BY EVENT_DATE DESC
         LIMIT {max_obs}
@@ -140,7 +140,7 @@ def get_resident_context(session, resident_id: int, max_notes: int = 15, max_obs
     
     forms = session.sql(f"""
         SELECT FORM_NAME, ELEMENT_NAME, RESPONSE, EVENT_DATE
-        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS 
+        FROM ACTIVE_RESIDENT_ASSESSMENT_FORMS 
         WHERE RESIDENT_ID = {resident_id}
         ORDER BY EVENT_DATE DESC
         LIMIT {max_forms}
@@ -161,7 +161,7 @@ def get_rag_indicators(session) -> str:
                DETECTION_MODE, CLINICAL_GUIDANCE, INCLUSION_TERMS, 
                EXCLUSION_PATTERNS, REGULATORY_REFERENCE, MULTI_RULE_GUIDANCE,
                TO_JSON(RULES_JSON) as RULES_JSON
-        FROM AGEDCARE.AGEDCARE.DRI_RULES
+        FROM DRI_RULES
         WHERE IS_CURRENT_VERSION = TRUE AND IS_ACTIVE = TRUE
         ORDER BY DEFICIT_ID
     """).collect()
@@ -191,7 +191,7 @@ DETECTION_MODE: {ind['DETECTION_MODE'] or 'clinical_reasoning'}"""
 def calculate_dri_score(session, resident_id: int):
     result = session.sql(f"""
         SELECT COUNT(*) as ACTIVE_DEFICITS
-        FROM AGEDCARE.AGEDCARE.DRI_DEFICIT_STATUS
+        FROM DRI_DEFICIT_STATUS
         WHERE RESIDENT_ID = {resident_id} AND DEFICIT_STATUS = 'ACTIVE'
     """).collect()
     

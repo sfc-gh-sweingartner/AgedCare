@@ -47,10 +47,10 @@ Clear operations **permanently delete** data. Use with caution in production env
                COUNT(DISTINCT rq.QUEUE_ID) as REVIEW_COUNT,
                COUNT(DISTINCT lla.ANALYSIS_ID) as ANALYSIS_COUNT,
                COUNT(DISTINCT ds.DEFICIT_ID) as DEFICIT_COUNT
-        FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES r
-        LEFT JOIN AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq ON r.RESIDENT_ID = rq.RESIDENT_ID
-        LEFT JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON r.RESIDENT_ID = lla.RESIDENT_ID
-        LEFT JOIN AGEDCARE.AGEDCARE.DRI_DEFICIT_STATUS ds ON r.RESIDENT_ID = ds.RESIDENT_ID
+        FROM ACTIVE_RESIDENT_NOTES r
+        LEFT JOIN DRI_REVIEW_QUEUE rq ON r.RESIDENT_ID = rq.RESIDENT_ID
+        LEFT JOIN DRI_LLM_ANALYSIS lla ON r.RESIDENT_ID = lla.RESIDENT_ID
+        LEFT JOIN DRI_DEFICIT_STATUS ds ON r.RESIDENT_ID = ds.RESIDENT_ID
         GROUP BY r.RESIDENT_ID
         ORDER BY r.RESIDENT_ID
     """, session)
@@ -76,7 +76,7 @@ Clear operations **permanently delete** data. Use with caution in production env
                     EXPIRY_DAYS,
                     COALESCE(RULES_JSON[0]:threshold::NUMBER, 1) as THRESHOLD,
                     RENEWAL_REMINDER_DAYS
-                FROM AGEDCARE.AGEDCARE.DRI_RULES 
+                FROM DRI_RULES 
                 WHERE IS_CURRENT_VERSION = TRUE
                 ORDER BY DEFICIT_TYPE, DEFICIT_ID
             """, session)
@@ -92,7 +92,7 @@ Clear operations **permanently delete** data. Use with caution in production env
                     with col_res:
                         resident_options = execute_query_df("""
                             SELECT DISTINCT RESIDENT_ID, SYSTEM_KEY 
-                            FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES 
+                            FROM ACTIVE_RESIDENT_NOTES 
                             WHERE SYSTEM_KEY IS NOT NULL
                             ORDER BY RESIDENT_ID
                         """, session)
@@ -248,7 +248,7 @@ Clear operations **permanently delete** data. Use with caution in production env
                             for occ_date in dates:
                                 occ_id = str(uuid.uuid4())
                                 execute_query(f"""
-                                    INSERT INTO AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES
+                                    INSERT INTO DRI_INDICATOR_OCCURRENCES
                                     (OCCURRENCE_ID, RESIDENT_ID, CLIENT_SYSTEM_KEY, DEFICIT_ID, DEFICIT_NAME,
                                      OCCURRENCE_DATE, SOURCE_ID, SOURCE_TABLE, EVIDENCE_TEXT,
                                      APPROVED_BY, APPROVAL_DATE)
@@ -282,7 +282,7 @@ Clear operations **permanently delete** data. Use with caution in production env
                     with col1:
                         custom_resident_options = execute_query_df("""
                             SELECT DISTINCT RESIDENT_ID, SYSTEM_KEY 
-                            FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES 
+                            FROM ACTIVE_RESIDENT_NOTES 
                             WHERE SYSTEM_KEY IS NOT NULL
                             ORDER BY RESIDENT_ID
                         """, session)
@@ -343,7 +343,7 @@ Clear operations **permanently delete** data. Use with caution in production env
                             for occ_date in dates:
                                 occ_id = str(uuid.uuid4())
                                 execute_query(f"""
-                                    INSERT INTO AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES
+                                    INSERT INTO DRI_INDICATOR_OCCURRENCES
                                     (OCCURRENCE_ID, RESIDENT_ID, CLIENT_SYSTEM_KEY, DEFICIT_ID, DEFICIT_NAME,
                                      OCCURRENCE_DATE, SOURCE_ID, SOURCE_TABLE, EVIDENCE_TEXT,
                                      APPROVED_BY, APPROVAL_DATE)
@@ -431,7 +431,7 @@ Clear operations **permanently delete** data. Use with caution in production env
                                     for occ_date in dates:
                                         occ_id = str(uuid.uuid4())
                                         execute_query(f"""
-                                            INSERT INTO AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES
+                                            INSERT INTO DRI_INDICATOR_OCCURRENCES
                                             (OCCURRENCE_ID, RESIDENT_ID, CLIENT_SYSTEM_KEY, DEFICIT_ID, DEFICIT_NAME,
                                              OCCURRENCE_DATE, SOURCE_ID, SOURCE_TABLE, EVIDENCE_TEXT,
                                              APPROVED_BY, APPROVAL_DATE)
@@ -519,39 +519,39 @@ Clear operations **permanently delete** data. Use with caution in production env
                         
                         if clear_reviews:
                             result = execute_query(f"""
-                                DELETE FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE 
+                                DELETE FROM DRI_REVIEW_QUEUE 
                                 WHERE RESIDENT_ID IN ({resident_ids_str})
                             """, session)
                             deleted_counts.append(f"Review Queue: cleared")
                         
                         if clear_analyses:
                             result = execute_query(f"""
-                                DELETE FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS 
+                                DELETE FROM DRI_LLM_ANALYSIS 
                                 WHERE RESIDENT_ID IN ({resident_ids_str})
                             """, session)
                             deleted_counts.append(f"LLM Analysis: cleared")
                         
                         if clear_occurrences:
                             result = execute_query(f"""
-                                DELETE FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES 
+                                DELETE FROM DRI_INDICATOR_OCCURRENCES 
                                 WHERE RESIDENT_ID IN ({resident_ids_str})
                             """, session)
                             deleted_counts.append(f"Indicator Occurrences: cleared")
                         
                         if clear_deficits:
                             result = execute_query(f"""
-                                DELETE FROM AGEDCARE.AGEDCARE.DRI_DEFICIT_STATUS 
+                                DELETE FROM DRI_DEFICIT_STATUS 
                                 WHERE RESIDENT_ID IN ({resident_ids_str})
                             """, session)
                             result = execute_query(f"""
-                                DELETE FROM AGEDCARE.AGEDCARE.DRI_DEFICIT_DETAIL 
+                                DELETE FROM DRI_DEFICIT_DETAIL 
                                 WHERE RESIDENT_ID IN ({resident_ids_str})
                             """, session)
                             deleted_counts.append(f"Deficit Status/Detail: cleared")
                         
                         if clear_decisions:
                             result = execute_query(f"""
-                                DELETE FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS 
+                                DELETE FROM DRI_CLINICAL_DECISIONS 
                                 WHERE RESIDENT_ID IN ({resident_ids_str})
                             """, session)
                             deleted_counts.append(f"Clinical Decisions: cleared")
@@ -570,13 +570,13 @@ Clear operations **permanently delete** data. Use with caution in production env
             
             summary = execute_query("""
                 SELECT 
-                    (SELECT COUNT(*) FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE) as REVIEW_COUNT,
-                    (SELECT COUNT(*) FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS) as ANALYSIS_COUNT,
-                    (SELECT COUNT(*) FROM AGEDCARE.AGEDCARE.DRI_DEFICIT_STATUS) as DEFICIT_STATUS_COUNT,
-                    (SELECT COUNT(*) FROM AGEDCARE.AGEDCARE.DRI_DEFICIT_DETAIL) as DEFICIT_DETAIL_COUNT,
-                    (SELECT COUNT(*) FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS) as DECISION_COUNT,
-                    (SELECT COUNT(*) FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES) as OCCURRENCE_COUNT,
-                    (SELECT COUNT(*) FROM AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH) as GROUND_TRUTH_COUNT
+                    (SELECT COUNT(*) FROM DRI_REVIEW_QUEUE) as REVIEW_COUNT,
+                    (SELECT COUNT(*) FROM DRI_LLM_ANALYSIS) as ANALYSIS_COUNT,
+                    (SELECT COUNT(*) FROM DRI_DEFICIT_STATUS) as DEFICIT_STATUS_COUNT,
+                    (SELECT COUNT(*) FROM DRI_DEFICIT_DETAIL) as DEFICIT_DETAIL_COUNT,
+                    (SELECT COUNT(*) FROM DRI_CLINICAL_DECISIONS) as DECISION_COUNT,
+                    (SELECT COUNT(*) FROM DRI_INDICATOR_OCCURRENCES) as OCCURRENCE_COUNT,
+                    (SELECT COUNT(*) FROM DRI_GROUND_TRUTH) as GROUND_TRUTH_COUNT
             """, session)
             
             if summary:
@@ -618,28 +618,28 @@ Clear operations **permanently delete** data. Use with caution in production env
                     cleared = []
                     
                     if clear_all_reviews:
-                        execute_query("DELETE FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE", session)
+                        execute_query("DELETE FROM DRI_REVIEW_QUEUE", session)
                         cleared.append("Review Queue")
                     
                     if clear_all_analyses:
-                        execute_query("DELETE FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS", session)
+                        execute_query("DELETE FROM DRI_LLM_ANALYSIS", session)
                         cleared.append("LLM Analysis")
                     
                     if clear_all_occurrences:
-                        execute_query("DELETE FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_OCCURRENCES", session)
+                        execute_query("DELETE FROM DRI_INDICATOR_OCCURRENCES", session)
                         cleared.append("Indicator Occurrences")
                     
                     if clear_all_deficits:
-                        execute_query("DELETE FROM AGEDCARE.AGEDCARE.DRI_DEFICIT_STATUS", session)
-                        execute_query("DELETE FROM AGEDCARE.AGEDCARE.DRI_DEFICIT_DETAIL", session)
+                        execute_query("DELETE FROM DRI_DEFICIT_STATUS", session)
+                        execute_query("DELETE FROM DRI_DEFICIT_DETAIL", session)
                         cleared.append("Deficit Status/Detail")
                     
                     if clear_all_decisions:
-                        execute_query("DELETE FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS", session)
+                        execute_query("DELETE FROM DRI_CLINICAL_DECISIONS", session)
                         cleared.append("Clinical Decisions")
                     
                     if clear_all_ground_truth:
-                        execute_query("DELETE FROM AGEDCARE.AGEDCARE.DRI_GROUND_TRUTH", session)
+                        execute_query("DELETE FROM DRI_GROUND_TRUTH", session)
                         cleared.append("Ground Truth")
                     
                     if cleared:
@@ -671,7 +671,7 @@ Clear operations **permanently delete** data. Use with caution in production env
             
             review_status = execute_query_df("""
                 SELECT STATUS, COUNT(*) as COUNT
-                FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE
+                FROM DRI_REVIEW_QUEUE
                 GROUP BY STATUS
                 ORDER BY COUNT DESC
             """, session)
@@ -687,7 +687,7 @@ Clear operations **permanently delete** data. Use with caution in production env
             analysis_by_version = execute_query_df("""
                 SELECT PROMPT_VERSION, COUNT(*) as COUNT, 
                        COUNT(DISTINCT RESIDENT_ID) as RESIDENTS
-                FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+                FROM DRI_LLM_ANALYSIS
                 GROUP BY PROMPT_VERSION
                 ORDER BY COUNT DESC
             """, session)

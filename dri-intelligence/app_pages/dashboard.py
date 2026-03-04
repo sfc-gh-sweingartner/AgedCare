@@ -29,10 +29,10 @@ Shows the last 10 LLM analyses run, including model used and processing time.
     with st.container(border=True):
         col1, col2, col3, col4 = st.columns(4)
         
-        residents = execute_query_df("SELECT COUNT(DISTINCT RESIDENT_ID) as CNT FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES", session)
-        pending = execute_query_df("SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE WHERE STATUS = 'PENDING'", session)
-        approved = execute_query_df("SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE WHERE STATUS = 'APPROVED'", session)
-        rejected = execute_query_df("SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE WHERE STATUS = 'REJECTED'", session)
+        residents = execute_query_df("SELECT COUNT(DISTINCT RESIDENT_ID) as CNT FROM ACTIVE_RESIDENT_NOTES", session)
+        pending = execute_query_df("SELECT COUNT(*) as CNT FROM DRI_REVIEW_QUEUE WHERE STATUS = 'PENDING'", session)
+        approved = execute_query_df("SELECT COUNT(*) as CNT FROM DRI_REVIEW_QUEUE WHERE STATUS = 'APPROVED'", session)
+        rejected = execute_query_df("SELECT COUNT(*) as CNT FROM DRI_REVIEW_QUEUE WHERE STATUS = 'REJECTED'", session)
         
         with col1:
             st.metric("Total residents", residents['CNT'].iloc[0] if residents is not None else 0)
@@ -49,7 +49,7 @@ Shows the last 10 LLM analyses run, including model used and processing time.
         st.subheader("Active prompt version")
         prompt = execute_query_df("""
             SELECT VERSION_NUMBER, DESCRIPTION, CREATED_TIMESTAMP 
-            FROM AGEDCARE.AGEDCARE.DRI_PROMPT_VERSIONS 
+            FROM DRI_PROMPT_VERSIONS 
             WHERE IS_ACTIVE = TRUE
         """, session)
         if prompt is not None and len(prompt) > 0:
@@ -63,7 +63,7 @@ Shows the last 10 LLM analyses run, including model used and processing time.
         st.subheader("Client configuration")
         config = execute_query_df("""
             SELECT CLIENT_SYSTEM_KEY, CLIENT_NAME, VERSION, IS_ACTIVE 
-            FROM AGEDCARE.AGEDCARE.DRI_CLIENT_CONFIG
+            FROM DRI_CLIENT_CONFIG
         """, session)
         if config is not None and len(config) > 0:
             st.dataframe(config, use_container_width=True)
@@ -74,7 +74,7 @@ Shows the last 10 LLM analyses run, including model used and processing time.
     
     analyses = execute_query_df("""
         SELECT RESIDENT_ID, MODEL_USED, PROMPT_VERSION, PROCESSING_TIME_MS, ANALYSIS_TIMESTAMP
-        FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS
+        FROM DRI_LLM_ANALYSIS
         ORDER BY ANALYSIS_TIMESTAMP DESC
         LIMIT 10
     """, session)
@@ -87,10 +87,10 @@ Shows the last 10 LLM analyses run, including model used and processing time.
     st.subheader("Data summary")
     
     data_counts = execute_query_df("""
-        SELECT 'Progress Notes' as SOURCE, COUNT(*) as RECORDS FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_NOTES
-        UNION ALL SELECT 'Medications', COUNT(*) FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_MEDICATION
-        UNION ALL SELECT 'Observations', COUNT(*) FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_OBSERVATIONS
-        UNION ALL SELECT 'Assessment Forms', COUNT(*) FROM AGEDCARE.AGEDCARE.ACTIVE_RESIDENT_ASSESSMENT_FORMS
+        SELECT 'Progress Notes' as SOURCE, COUNT(*) as RECORDS FROM ACTIVE_RESIDENT_NOTES
+        UNION ALL SELECT 'Medications', COUNT(*) FROM ACTIVE_RESIDENT_MEDICATION
+        UNION ALL SELECT 'Observations', COUNT(*) FROM ACTIVE_RESIDENT_OBSERVATIONS
+        UNION ALL SELECT 'Assessment Forms', COUNT(*) FROM ACTIVE_RESIDENT_ASSESSMENT_FORMS
         ORDER BY RECORDS DESC
     """, session)
     

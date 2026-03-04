@@ -69,12 +69,12 @@ Some deficits require multiple occurrences before becoming flagged:
     with st.container(border=True):
         col1, col2, col3, col4, col5 = st.columns(5)
         
-        pending = execute_query("SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE WHERE STATUS = 'PENDING'", session)
-        approved = execute_query("SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE WHERE STATUS = 'APPROVED'", session)
-        rejected = execute_query("SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE WHERE STATUS = 'REJECTED'", session)
-        active_decisions = execute_query("SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS WHERE STATUS = 'ACTIVE'", session)
+        pending = execute_query("SELECT COUNT(*) as CNT FROM DRI_REVIEW_QUEUE WHERE STATUS = 'PENDING'", session)
+        approved = execute_query("SELECT COUNT(*) as CNT FROM DRI_REVIEW_QUEUE WHERE STATUS = 'APPROVED'", session)
+        rejected = execute_query("SELECT COUNT(*) as CNT FROM DRI_REVIEW_QUEUE WHERE STATUS = 'REJECTED'", session)
+        active_decisions = execute_query("SELECT COUNT(*) as CNT FROM DRI_CLINICAL_DECISIONS WHERE STATUS = 'ACTIVE'", session)
         renewals_due = execute_query("""
-            SELECT COUNT(*) as CNT FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS 
+            SELECT COUNT(*) as CNT FROM DRI_CLINICAL_DECISIONS 
             WHERE STATUS = 'ACTIVE' 
             AND DEFICIT_TYPE = 'FLUCTUATING'
             AND EXPIRY_DATE IS NOT NULL
@@ -108,8 +108,8 @@ Some deficits require multiple occurrences before becoming flagged:
                     rq.STATUS, rq.CREATED_TIMESTAMP, rq.REVIEWER_NOTES,
                     rq.EXCLUDED_INDICATORS,
                     lla.MODEL_USED, lla.PROMPT_VERSION
-                FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq
-                LEFT JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+                FROM DRI_REVIEW_QUEUE rq
+                LEFT JOIN DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
                 ORDER BY rq.CREATED_TIMESTAMP DESC
                 LIMIT 50
             """
@@ -124,8 +124,8 @@ Some deficits require multiple occurrences before becoming flagged:
                     rq.STATUS, rq.CREATED_TIMESTAMP, rq.REVIEWER_NOTES,
                     rq.EXCLUDED_INDICATORS,
                     lla.MODEL_USED, lla.PROMPT_VERSION
-                FROM AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE rq
-                LEFT JOIN AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
+                FROM DRI_REVIEW_QUEUE rq
+                LEFT JOIN DRI_LLM_ANALYSIS lla ON rq.ANALYSIS_ID = lla.ANALYSIS_ID
                 WHERE rq.STATUS = '{status_filter}'
                 ORDER BY rq.CREATED_TIMESTAMP DESC
                 LIMIT 50
@@ -173,7 +173,7 @@ Some deficits require multiple occurrences before becoming flagged:
                         existing_decisions = execute_query_df(f"""
                             SELECT DEFICIT_ID, DECISION_TYPE, DEFICIT_TYPE, EXPIRY_DATE, 
                                    DECISION_DATE, DECIDED_BY, STATUS
-                            FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                            FROM DRI_CLINICAL_DECISIONS
                             WHERE RESIDENT_ID = {row['RESIDENT_ID']}
                             AND STATUS = 'ACTIVE'
                         """, session)
@@ -185,7 +185,7 @@ Some deficits require multiple occurrences before becoming flagged:
                         
                         rules_data = execute_query_df("""
                             SELECT DEFICIT_ID, DEFICIT_TYPE, EXPIRY_DAYS, RENEWAL_REMINDER_DAYS
-                            FROM AGEDCARE.AGEDCARE.DRI_RULES
+                            FROM DRI_RULES
                             WHERE IS_CURRENT_VERSION = TRUE
                         """, session)
                         
@@ -224,7 +224,7 @@ Some deficits require multiple occurrences before becoming flagged:
                                     review_type = "EXISTING_TEMPORAL"
                                     type_badge = "🔄 EXISTING"
                                     type_color = "blue"
-                            if review_type == "NEW_INDICATOR":
+                            else:
                                 review_type = "NEW_DEFICIT"
                                 type_badge = "🆕 NEW"
                                 type_color = "orange"
@@ -258,7 +258,7 @@ Some deficits require multiple occurrences before becoming flagged:
                                     
                                     if st.button(f"↩️ Undo Rejection", key=f"undo_reject_{row['QUEUE_ID']}_{ind_id}", use_container_width=True):
                                         execute_query(f"""
-                                            DELETE FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                                            DELETE FROM DRI_CLINICAL_DECISIONS
                                             WHERE RESIDENT_ID = {row['RESIDENT_ID']}
                                             AND DEFICIT_ID = '{ind_id}'
                                             AND STATUS = 'ACTIVE'
@@ -278,7 +278,7 @@ Some deficits require multiple occurrences before becoming flagged:
                                     with col_ext:
                                         if st.button(f"🔄 Extend", key=f"extend_{row['QUEUE_ID']}_{ind_id}", use_container_width=True):
                                             execute_query(f"""
-                                                UPDATE AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                                                UPDATE DRI_CLINICAL_DECISIONS
                                                 SET DECISION_DATE = CURRENT_DATE(),
                                                     EXPIRY_DATE = DATEADD(day, COALESCE(OVERRIDE_EXPIRY_DAYS, DEFAULT_EXPIRY_DAYS), CURRENT_DATE()),
                                                     DECIDED_BY = CURRENT_USER(),
@@ -292,7 +292,7 @@ Some deficits require multiple occurrences before becoming flagged:
                                     with col_end:
                                         if st.button(f"🛑 End Now", key=f"end_{row['QUEUE_ID']}_{ind_id}", use_container_width=True):
                                             execute_query(f"""
-                                                UPDATE AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                                                UPDATE DRI_CLINICAL_DECISIONS
                                                 SET STATUS = 'EXPIRED',
                                                     EXPIRY_DATE = CURRENT_DATE()
                                                 WHERE RESIDENT_ID = {row['RESIDENT_ID']}
@@ -315,7 +315,7 @@ Some deficits require multiple occurrences before becoming flagged:
                                         if st.button(f"✅ Confirm", key=f"confirm_{row['QUEUE_ID']}_{ind_id}", use_container_width=True, type="primary"):
                                             try:
                                                 result = execute_query(f"""
-                                                    CALL AGEDCARE.AGEDCARE.DRI_EVENT_PROCESSOR(
+                                                    CALL DRI_EVENT_PROCESSOR(
                                                         {row['RESIDENT_ID']},
                                                         '{row['CLIENT_SYSTEM_KEY']}',
                                                         '{ind_id}',
@@ -378,7 +378,7 @@ Some deficits require multiple occurrences before becoming flagged:
                                                         reason_escaped = reason.replace("'", "''") if reason else "False positive"
                                                         try:
                                                             result = execute_query(f"""
-                                                                CALL AGEDCARE.AGEDCARE.DRI_EVENT_PROCESSOR(
+                                                                CALL DRI_EVENT_PROCESSOR(
                                                                     {row['RESIDENT_ID']},
                                                                     '{row['CLIENT_SYSTEM_KEY']}',
                                                                     '{ind_id}',
@@ -414,7 +414,7 @@ Some deficits require multiple occurrences before becoming flagged:
                                     continue
                                 
                                 already_decided = execute_query(f"""
-                                    SELECT 1 FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                                    SELECT 1 FROM DRI_CLINICAL_DECISIONS
                                     WHERE RESIDENT_ID = {row['RESIDENT_ID']}
                                     AND DEFICIT_ID = '{ind_auto_id}'
                                     AND STATUS = 'ACTIVE'
@@ -425,7 +425,7 @@ Some deficits require multiple occurrences before becoming flagged:
                                     continue
                                 
                                 already_rejected_now = execute_query(f"""
-                                    SELECT 1 FROM AGEDCARE.AGEDCARE.DRI_INDICATOR_REJECTIONS
+                                    SELECT 1 FROM DRI_INDICATOR_REJECTIONS
                                     WHERE QUEUE_ID = '{row['QUEUE_ID']}'
                                     AND INDICATOR_ID = '{ind_auto_id}'
                                     LIMIT 1
@@ -442,7 +442,7 @@ Some deficits require multiple occurrences before becoming flagged:
                                 
                                 try:
                                     execute_query(f"""
-                                        CALL AGEDCARE.AGEDCARE.DRI_EVENT_PROCESSOR(
+                                        CALL DRI_EVENT_PROCESSOR(
                                             {row['RESIDENT_ID']},
                                             '{row['CLIENT_SYSTEM_KEY']}',
                                             '{ind_auto_id}',
@@ -461,7 +461,7 @@ Some deficits require multiple occurrences before becoming flagged:
                                     st.warning(f"Failed to approve {ind_auto_id}: {e}")
                             
                             execute_query(f"""
-                                UPDATE AGEDCARE.AGEDCARE.DRI_REVIEW_QUEUE 
+                                UPDATE DRI_REVIEW_QUEUE 
                                 SET STATUS = 'APPROVED', 
                                     REVIEW_TIMESTAMP = CURRENT_TIMESTAMP(),
                                     REVIEWER_USER = CURRENT_USER(),
@@ -492,7 +492,7 @@ Some deficits require multiple occurrences before becoming flagged:
                    DECISION_TYPE, DECISION_REASON, DEFICIT_TYPE,
                    DECISION_DATE, EXPIRY_DATE, RENEWAL_REMINDER_DAYS,
                    DECIDED_BY, STATUS
-            FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+            FROM DRI_CLINICAL_DECISIONS
             WHERE STATUS = 'ACTIVE'
         """
         
@@ -535,14 +535,14 @@ Some deficits require multiple occurrences before becoming flagged:
                    DATEDIFF(day, CURRENT_DATE(), cd.EXPIRY_DATE) as DAYS_REMAINING,
                    CASE 
                        WHEN EXISTS (
-                           SELECT 1 FROM AGEDCARE.AGEDCARE.DRI_LLM_ANALYSIS lla
+                           SELECT 1 FROM DRI_LLM_ANALYSIS lla
                            WHERE lla.RESIDENT_ID = cd.RESIDENT_ID
                            AND lla.ANALYSIS_TIMESTAMP >= DATEADD(day, -30, CURRENT_DATE())
                            AND lla.RAW_RESPONSE ILIKE '%' || cd.DEFICIT_ID || '%'
                        ) THEN 'Recent evidence found. Recommend: RENEW'
                        ELSE 'No recent evidence. Recommend: LET EXPIRE'
                    END as RECOMMENDATION
-            FROM AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS cd
+            FROM DRI_CLINICAL_DECISIONS cd
             WHERE cd.STATUS = 'ACTIVE'
             AND cd.DEFICIT_TYPE = 'FLUCTUATING'
             AND cd.EXPIRY_DATE IS NOT NULL
@@ -580,7 +580,7 @@ Some deficits require multiple occurrences before becoming flagged:
                         default_days = int(renewal['DEFAULT_EXPIRY_DAYS']) if renewal['DEFAULT_EXPIRY_DAYS'] else 90
                         if st.button(f"✅ Renew ({default_days} days)", key=f"renew_{renewal['DECISION_ID']}", use_container_width=True, type="primary" if recommend_renew else "secondary"):
                             execute_query(f"""
-                                UPDATE AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                                UPDATE DRI_CLINICAL_DECISIONS
                                 SET DECISION_DATE = CURRENT_DATE(),
                                     EXPIRY_DATE = DATEADD(day, {default_days}, CURRENT_DATE()),
                                     DECIDED_BY = CURRENT_USER(),
@@ -601,7 +601,7 @@ Some deficits require multiple occurrences before becoming flagged:
                             custom_days = st.number_input("Days", min_value=1, max_value=365, value=default_days, key=custom_key + "_days")
                             if st.button("Apply", key=custom_key + "_apply"):
                                 execute_query(f"""
-                                    UPDATE AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                                    UPDATE DRI_CLINICAL_DECISIONS
                                     SET DECISION_DATE = CURRENT_DATE(),
                                         EXPIRY_DATE = DATEADD(day, {custom_days}, CURRENT_DATE()),
                                         OVERRIDE_EXPIRY_DAYS = {custom_days},
@@ -617,7 +617,7 @@ Some deficits require multiple occurrences before becoming flagged:
                     with col_expire:
                         if st.button("⏹️ Let Expire", key=f"expire_{renewal['DECISION_ID']}", use_container_width=True, type="primary" if not recommend_renew else "secondary"):
                             execute_query(f"""
-                                UPDATE AGEDCARE.AGEDCARE.DRI_CLINICAL_DECISIONS
+                                UPDATE DRI_CLINICAL_DECISIONS
                                 SET STATUS = 'EXPIRED',
                                     DECISION_REASON = COALESCE(DECISION_REASON, '') || ' | Let expire via renewal queue'
                                 WHERE DECISION_ID = '{renewal['DECISION_ID']}'
