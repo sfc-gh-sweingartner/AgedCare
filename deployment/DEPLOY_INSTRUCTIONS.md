@@ -1,104 +1,190 @@
 # DRI Intelligence - Deployment Guide
 
-This guide explains how to deploy the DRI Intelligence solution to a new Snowflake environment using CoCo CLI.
+## Overview
+This guide covers deploying DRI Intelligence to a new Snowflake environment.
 
 ## Prerequisites
+- Snowflake account with ACCOUNTADMIN role (or equivalent privileges)
+- Snow CLI installed and configured (`snow --version`)
+- Connection configured in `~/.snowflake/connections.toml`
 
-1. **CoCo CLI** installed and configured with a Snowflake connection
-2. **Snowflake account** with ACCOUNTADMIN or appropriate privileges:
-   - CREATE DATABASE, CREATE SCHEMA, CREATE TABLE
-   - CREATE COMPUTE POOL, CREATE EXTERNAL ACCESS INTEGRATION
-   - CREATE STREAMLIT
-3. **Demo data files** (emailed separately):
-   - `De-identified - 871 - Integration.xlsx` - Demo resident data
-   - `dri_master_keyword_list.json` - DRI keyword definitions
-   - `dri_business_rules_template.json` - Clinical business rules
-4. **Python 3.11+** with pandas, openpyxl, snowflake-connector-python
+## Deployment Steps
 
-## Quick Start
+### Step 1: Configure Connection
+Ensure you have a connection configured for your target environment:
 
-1. Place the confidential data files in a local folder
-2. Open CoCo CLI and connect to your target Snowflake environment
-3. Run this prompt:
-
-```
-Deploy the DRI Intelligence solution. The confidential data files are in [YOUR_PATH].
-```
-
-CoCo will interactively ask you for:
-- Connection name
-- Database name
-- Schema name  
-- Warehouse name
-- Compute pool name (will create if needed)
-- External access integration name (will create if needed)
-
-## Manual Deployment Steps
-
-If you prefer to deploy manually, follow these steps in order:
-
-### Step 1: Setup Infrastructure
-```sql
--- Run setup_infrastructure.sql with your parameters
--- Creates compute pool and external access integration
-```
-
-### Step 2: Create Database Objects
-```sql
--- Run setup_database.sql
--- Creates all required tables
-```
-
-### Step 3: Load Demo Data
 ```bash
-# Run the Python data loader
-SNOWFLAKE_CONNECTION_NAME=your_connection python load_demo_data.py
+# List available connections
+snow connection list
+
+# Test connection
+snow connection test -c <CONNECTION_NAME>
 ```
 
-### Step 4: Deploy Streamlit App
+### Step 2: Set SQL Variables
+Before running SQL scripts, set these session variables:
+
 ```sql
--- Run deploy_streamlit.sql
--- Creates the Streamlit app in SPCS
+SET database_name = 'AGEDCARE_TEST';   -- Your target database
+SET schema_name = 'DRI';                -- Your target schema  
+SET warehouse_name = 'COMPUTE_WH';      -- Your warehouse
+SET compute_pool_name = 'DRI_COMPUTE_POOL';
+SET external_access_name = 'ALLOW_ALL_ACCESS_INTEGRATION';
 ```
 
-## Files Overview
+### Step 3: Create Infrastructure
+Run `setup_infrastructure.sql` to create:
+- Compute pool for SPCS container runtime
+- External access integration for PyPI
 
-### In Git Repository (deployment/)
-- `DEPLOY_INSTRUCTIONS.md` - This file
-- `setup_infrastructure.sql` - SPCS compute pool & external access
-- `setup_database.sql` - All table DDL
-- `deploy_streamlit.sql` - Streamlit deployment command
+```bash
+snow sql -f deployment/setup_infrastructure.sql -c <CONNECTION_NAME>
+```
 
-### Confidential (emailed separately)
-- `load_demo_data.py` - Loads Excel data into tables
-- `load_config_data.py` - Loads JSON config files
-- Demo data files (Excel, JSON)
+### Step 4: Create Database Objects
+Run `setup_database.sql` to create:
+- Database and schema
+- All source data tables (ACTIVE_RESIDENT_*)
+- All DRI tables and views
+- Stage for app files
 
-## Post-Deployment Verification
+```bash
+snow sql -f deployment/setup_database.sql -c <CONNECTION_NAME>
+```
 
-After deployment, verify:
-1. All tables exist and have data
-2. Streamlit app is accessible
-3. Dashboard shows resident count > 0
-4. Can run LLM analysis on a test resident
+### Step 5: Upload Config Data
+Upload the CSV config files to the stage:
+
+```bash
+# From the AgedCare directory
+snow stage copy Confidential/deployment/config_data/DRI_CLIENT_CONFIG.csv \
+    @<DATABASE>.<SCHEMA>.DRI_STREAMLIT_STAGE/config --overwrite -c <CONNECTION_NAME>
+
+snow stage copy Confidential/deployment/config_data/DRI_PROMPT_VERSIONS.csv \
+    @<DATABASE>.<SCHEMA>.DRI_STREAMLIT_STAGE/config --overwrite -c <CONNECTION_NAME>
+
+snow stage copy Confidential/deployment/config_data/DRI_RULES.csv \
+    @<DATABASE>.<SCHEMA>.DRI_STREAMLIT_STAGE/config --overwrite -c <CONNECTION_NAME>
+
+snow stage copy Confidential/deployment/config_data/DRI_CLIENT_RULE_ASSIGNMENTS.csv \
+    @<DATABASE>.<SCHEMA>.DRI_STREAMLIT_STAGE/config --overwrite -c <CONNECTION_NAME>
+```
+
+### Step 6: Load Config Data
+Run `load_config_data.sql` to load configuration:
+
+```bash
+snow sql -f deployment/load_config_data.sql -c <CONNECTION_NAME>
+```
+
+### Step 7: Configure snowflake.yml
+Update `dri-intelligence/snowflake.yml` with your environment settings:
+
+```yaml
+definition_version: 2
+entities:
+  dri_intelligence:
+    type: streamlit
+    identifier:
+      name: DRI_INTELLIGENCE
+      database: AGEDCARE_TEST          # <-- Your database
+      schema: DRI                       # <-- Your schema
+    title: DRI Intelligence
+    query_warehouse: COMPUTE_WH         # <-- Your warehouse
+    compute_pool: DRI_COMPUTE_POOL      # <-- Your compute pool
+    runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
+    external_access_integrations:
+      - ALLOW_ALL_ACCESS_INTEGRATION    # <-- Your integration
+    main_file: streamlit_app.py
+    artifacts:
+      - streamlit_app.py
+      - pyproject.toml
+      - uv.lock
+      - src/__init__.py
+      - src/connection_helper.py
+      - src/dri_analysis.py
+      - app_pages/__init__.py
+      - app_pages/dashboard.py
+      - app_pages/prompt_engineering.py
+      - app_pages/batch_testing.py
+      - app_pages/review_queue.py
+      - app_pages/resident_history.py
+      - app_pages/audit_results.py
+      - app_pages/feedback_loop.py
+      - app_pages/configuration.py
+      - app_pages/comparison.py
+      - app_pages/testing_tools.py
+```
+
+### Step 8: Deploy Streamlit App
+Deploy using snow CLI (NOT SQL):
+
+```bash
+cd dri-intelligence
+snow streamlit deploy -c <CONNECTION_NAME>
+
+# For updates:
+snow streamlit deploy --replace -c <CONNECTION_NAME>
+```
+
+### Step 9: Load Demo Data (Optional)
+If you have demo resident data, load it into the ACTIVE_RESIDENT_* tables.
+
+## Verification
+
+### Check Database Objects
+```sql
+SELECT TABLE_NAME, TABLE_TYPE 
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'DRI' 
+ORDER BY TABLE_TYPE, TABLE_NAME;
+```
+
+### Check Config Data
+```sql
+SELECT 'DRI_CLIENT_CONFIG' AS TBL, COUNT(*) AS CNT FROM DRI_CLIENT_CONFIG
+UNION ALL SELECT 'DRI_PROMPT_VERSIONS', COUNT(*) FROM DRI_PROMPT_VERSIONS
+UNION ALL SELECT 'DRI_RULES', COUNT(*) FROM DRI_RULES
+UNION ALL SELECT 'DRI_CLIENT_RULE_ASSIGNMENTS', COUNT(*) FROM DRI_CLIENT_RULE_ASSIGNMENTS;
+```
+
+### Check Streamlit App
+```sql
+SHOW STREAMLITS IN SCHEMA <DATABASE>.<SCHEMA>;
+DESCRIBE STREAMLIT <DATABASE>.<SCHEMA>.DRI_INTELLIGENCE;
+```
+
+### Get App URL
+```sql
+SELECT SYSTEM$GET_STREAMLIT_URL('<DATABASE>.<SCHEMA>.DRI_INTELLIGENCE');
+```
 
 ## Troubleshooting
 
-### Compute Pool Issues
-If Streamlit fails to start, check compute pool is running:
-```sql
-SHOW COMPUTE POOLS;
-ALTER COMPUTE POOL <name> RESUME;
-```
+### App shows "Starting..." for too long
+1. Check compute pool: `SHOW COMPUTE POOLS;`
+2. Resume if suspended: `ALTER COMPUTE POOL <NAME> RESUME;`
+3. Check external access: `SHOW EXTERNAL ACCESS INTEGRATIONS;`
 
-### External Access Issues
-If LLM calls fail, verify external access integration:
-```sql
-SHOW EXTERNAL ACCESS INTEGRATIONS;
-```
+### "Object does not exist" errors
+- The app uses `get_active_session()` which inherits database/schema context
+- Ensure all tables exist in the target schema
+- Check table names match (case-sensitive)
 
-### Data Loading Issues
-If Python loader fails, ensure:
-- Correct connection name in SNOWFLAKE_CONNECTION_NAME env var
-- Excel file path is correct
-- Database and schema exist
+### "ROOT_LOCATION stages not supported for vNext"
+- Container runtime apps MUST use `snow streamlit deploy`
+- Do NOT use `CREATE STREAMLIT` SQL command
+
+### Missing DEFICIT_TYPE or other columns
+- Ensure you're using the V2.0 `setup_database.sql` which has complete schemas
+- Re-run setup_database.sql to recreate tables with correct columns
+
+## Files Reference
+
+| File | Purpose |
+|------|---------|
+| `setup_infrastructure.sql` | Create compute pool and external access |
+| `setup_database.sql` | Create all database objects |
+| `load_config_data.sql` | Load config CSVs into tables |
+| `deploy_streamlit.sql` | Documentation for Streamlit deployment |
+| `Confidential/deployment/config_data/*.csv` | Configuration data files |
