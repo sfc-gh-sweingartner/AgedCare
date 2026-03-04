@@ -127,8 +127,56 @@ snow streamlit deploy -c <CONNECTION_NAME>
 snow streamlit deploy --replace -c <CONNECTION_NAME>
 ```
 
-### Step 9: Load Demo Data (Optional)
-If you have demo resident data, load it into the ACTIVE_RESIDENT_* tables.
+### Step 9: Load Patient/Resident Data (Optional)
+If you have demo resident data to test with, load it into the ACTIVE_RESIDENT_* tables.
+
+**Option A: Using pre-exported CSV files**
+
+1. Upload patient data CSVs to stage:
+```bash
+# From the AgedCare directory
+for f in Confidential/deployment/patient_data/*.csv; do
+    snow stage copy "$f" @<DATABASE>.<SCHEMA>.DRI_STREAMLIT_STAGE/patients \
+        --overwrite -c <CONNECTION_NAME>
+done
+```
+
+2. Run the load script:
+```bash
+snow sql -f deployment/load_patients.sql -c <CONNECTION_NAME>
+```
+
+**Option B: Export from another environment**
+
+Export patient data from a source environment with date cleansing (handles corrupt timestamps):
+
+```sql
+-- In source environment, export each table with date cleansing
+COPY INTO @<STAGE>/export/ACTIVE_RESIDENT_NOTES.csv
+FROM ACTIVE_RESIDENT_NOTES
+FILE_FORMAT = (TYPE = CSV FIELD_OPTIONALLY_ENCLOSED_BY = '"' COMPRESSION = NONE NULL_IF = (''))
+OVERWRITE = TRUE SINGLE = TRUE HEADER = TRUE;
+
+-- For tables with timestamp columns that may have invalid dates:
+COPY INTO @<STAGE>/export/ACTIVE_RESIDENT_MEDICATION.csv
+FROM (SELECT 
+  * EXCLUDE (MED_END_DATE, UPDATED_DATE),
+  CASE WHEN YEAR(MED_END_DATE) < 1900 OR YEAR(MED_END_DATE) > 2100 THEN NULL ELSE MED_END_DATE END AS MED_END_DATE,
+  CASE WHEN YEAR(UPDATED_DATE) < 1900 OR YEAR(UPDATED_DATE) > 2100 THEN NULL ELSE UPDATED_DATE END AS UPDATED_DATE
+FROM ACTIVE_RESIDENT_MEDICATION)
+FILE_FORMAT = (TYPE = CSV FIELD_OPTIONALLY_ENCLOSED_BY = '"' COMPRESSION = NONE NULL_IF = (''))
+OVERWRITE = TRUE SINGLE = TRUE HEADER = TRUE;
+```
+
+**Expected row counts after loading:**
+| Table | Expected Rows |
+|-------|--------------|
+| ACTIVE_RESIDENT_NOTES | 632 |
+| ACTIVE_RESIDENT_MEDICAL_PROFILE | 3 |
+| ACTIVE_RESIDENT_MEDICATION | 124 |
+| ACTIVE_RESIDENT_OBSERVATIONS | ~2026 |
+| ACTIVE_RESIDENT_OBSERVATION_GROUP | 4 |
+| ACTIVE_RESIDENT_ASSESSMENT_FORMS | 416 |
 
 ## Verification
 
@@ -186,5 +234,7 @@ SELECT SYSTEM$GET_STREAMLIT_URL('<DATABASE>.<SCHEMA>.DRI_INTELLIGENCE');
 | `setup_infrastructure.sql` | Create compute pool and external access |
 | `setup_database.sql` | Create all database objects |
 | `load_config_data.sql` | Load config CSVs into tables |
+| `load_patients.sql` | Load patient data CSVs (optional) |
 | `deploy_streamlit.sql` | Documentation for Streamlit deployment |
 | `Confidential/deployment/config_data/*.csv` | Configuration data files |
+| `Confidential/deployment/patient_data/*.csv` | Patient demo data files (optional) |
