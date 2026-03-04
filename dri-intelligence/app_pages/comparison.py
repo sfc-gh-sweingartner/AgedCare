@@ -292,8 +292,8 @@ if session:
                         '\\nDEFINITION: ' || COALESCE(DEFINITION, '') ||
                         '\\nDETECTION_MODE: ' || COALESCE(DETECTION_MODE, 'clinical_reasoning') ||
                         '\\nCLINICAL_GUIDANCE: ' || COALESCE(CLINICAL_GUIDANCE, '') ||
-                        '\\nINCLUSION_TERMS: ' || COALESCE(ARRAY_TO_STRING(INCLUSION_TERMS, ', '), '') ||
-                        '\\nEXCLUSION_PATTERNS: ' || COALESCE(ARRAY_TO_STRING(EXCLUSION_PATTERNS, ', '), ''),
+                        '\\nINCLUSION_TERMS: ' || COALESCE(INCLUSION_TERMS, '') ||
+                        '\\nEXCLUSION_PATTERNS: ' || COALESCE(EXCLUSION_PATTERNS, ''),
                         '\\n\\n'
                     ) WITHIN GROUP (ORDER BY DEFICIT_ID) as RULES_TEXT
                     FROM AGEDCARE.AGEDCARE.DRI_RULES
