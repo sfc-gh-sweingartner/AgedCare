@@ -29,7 +29,7 @@ SET database_name = 'AGEDCARE_TEST';   -- Your target database
 SET schema_name = 'DRI';                -- Your target schema  
 SET warehouse_name = 'COMPUTE_WH';      -- Your warehouse
 SET compute_pool_name = 'DRI_COMPUTE_POOL';
-SET external_access_name = 'ALLOW_ALL_ACCESS_INTEGRATION';
+SET external_access_name = 'DRI_PYPI_ACCESS_INTEGRATION';
 ```
 
 ### Step 3: Create Infrastructure
@@ -94,7 +94,7 @@ entities:
     compute_pool: DRI_COMPUTE_POOL      # <-- Your compute pool
     runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
     external_access_integrations:
-      - ALLOW_ALL_ACCESS_INTEGRATION    # <-- Your integration
+      - DRI_PYPI_ACCESS_INTEGRATION     # <-- Your integration
     main_file: streamlit_app.py
     artifacts:
       - streamlit_app.py

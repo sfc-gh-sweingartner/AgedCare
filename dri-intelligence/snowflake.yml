@@ -10,7 +10,7 @@ entities:
     compute_pool: STREAMLIT_COMPUTE_POOL
     runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
     external_access_integrations:
-      - PYPI_ACCESS_INTEGRATION
+      - DRI_PYPI_ACCESS_INTEGRATION
     main_file: streamlit_app.py
     artifacts:
       - streamlit_app.py

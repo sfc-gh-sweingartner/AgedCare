@@ -9,7 +9,6 @@
 -- SET schema_name = 'DRI';
 -- SET warehouse_name = 'COMPUTE_WH';
 -- SET compute_pool_name = 'DRI_COMPUTE_POOL';
--- SET external_access_name = 'ALLOW_ALL_ACCESS_INTEGRATION';
 
 -- ============================================================================
 -- 1. CREATE COMPUTE POOL (for Streamlit SPCS Container Runtime)
@@ -32,48 +31,51 @@ ALTER COMPUTE POOL IF EXISTS IDENTIFIER($compute_pool_name) RESUME;
 SHOW COMPUTE POOLS LIKE $compute_pool_name;
 
 -- ============================================================================
--- 2. OPTION A: CREATE ALLOW-ALL EXTERNAL ACCESS (Simpler, for dev/demo)
+-- 2. CREATE PYPI EXTERNAL ACCESS INTEGRATION (Recommended - Restrictive)
 -- ============================================================================
--- This allows outbound access to any host (PyPI, APIs, etc.)
+-- This integration ONLY allows outbound access to PyPI for package installation.
+-- This is the secure default for production and sensitive environments.
 
-CREATE OR REPLACE NETWORK RULE IDENTIFIER($database_name || '.' || $schema_name || '.ALLOW_ALL_NETWORK_RULE')
+CREATE OR REPLACE NETWORK RULE IDENTIFIER($database_name || '.' || $schema_name || '.DRI_PYPI_NETWORK_RULE')
     MODE = EGRESS
     TYPE = HOST_PORT
-    VALUE_LIST = ('0.0.0.0:443', '0.0.0.0:80')
-    COMMENT = 'Allow all outbound HTTPS/HTTP access';
+    VALUE_LIST = (
+        'pypi.org:443',
+        'files.pythonhosted.org:443',
+        'pypi.python.org:443'
+    )
+    COMMENT = 'Network rule for PyPI package access only';
 
-CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION ALLOW_ALL_ACCESS_INTEGRATION
-    ALLOWED_NETWORK_RULES = (IDENTIFIER($database_name || '.' || $schema_name || '.ALLOW_ALL_NETWORK_RULE'))
+CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION DRI_PYPI_ACCESS_INTEGRATION
+    ALLOWED_NETWORK_RULES = (IDENTIFIER($database_name || '.' || $schema_name || '.DRI_PYPI_NETWORK_RULE'))
     ENABLED = TRUE
-    COMMENT = 'External access for all outbound connections';
+    COMMENT = 'External access for PyPI package installation only - no other outbound access';
 
 -- ============================================================================
--- 2. OPTION B: CREATE PYPI-ONLY EXTERNAL ACCESS (More restrictive, for prod)
+-- 3. OPTIONAL: CREATE ALLOW-ALL EXTERNAL ACCESS (Development/Demo Only)
 -- ============================================================================
--- Uncomment this section if you prefer restricted access
+-- WARNING: This allows outbound access to ANY host on ports 80/443.
+-- DO NOT use in production or environments with sensitive data.
+-- Only uncomment if you need to access external APIs beyond PyPI.
 
--- CREATE OR REPLACE NETWORK RULE IDENTIFIER($database_name || '.' || $schema_name || '.PYPI_NETWORK_RULE')
+-- CREATE OR REPLACE NETWORK RULE IDENTIFIER($database_name || '.' || $schema_name || '.DRI_ALLOW_ALL_NETWORK_RULE')
 --     MODE = EGRESS
 --     TYPE = HOST_PORT
---     VALUE_LIST = (
---         'pypi.org:443',
---         'files.pythonhosted.org:443',
---         'pypi.python.org:443'
---     )
---     COMMENT = 'Network rule for PyPI package access';
+--     VALUE_LIST = ('0.0.0.0:443', '0.0.0.0:80')
+--     COMMENT = 'WARNING: Allow all outbound HTTPS/HTTP access - DEV ONLY';
 
--- CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PYPI_ACCESS_INTEGRATION
---     ALLOWED_NETWORK_RULES = (IDENTIFIER($database_name || '.' || $schema_name || '.PYPI_NETWORK_RULE'))
+-- CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION DRI_ALLOW_ALL_ACCESS_INTEGRATION
+--     ALLOWED_NETWORK_RULES = (IDENTIFIER($database_name || '.' || $schema_name || '.DRI_ALLOW_ALL_NETWORK_RULE'))
 --     ENABLED = TRUE
---     COMMENT = 'External access for PyPI package installation only';
+--     COMMENT = 'WARNING: External access for all outbound connections - DEV ONLY';
 
 -- ============================================================================
--- 3. GRANT PERMISSIONS (if using non-ACCOUNTADMIN role)
+-- 4. GRANT PERMISSIONS (if using non-ACCOUNTADMIN role)
 -- ============================================================================
 -- Uncomment and modify if you need to grant permissions to other roles
 
 -- GRANT USAGE ON COMPUTE POOL IDENTIFIER($compute_pool_name) TO ROLE <your_role>;
--- GRANT USAGE ON INTEGRATION ALLOW_ALL_ACCESS_INTEGRATION TO ROLE <your_role>;
+-- GRANT USAGE ON INTEGRATION DRI_PYPI_ACCESS_INTEGRATION TO ROLE <your_role>;
 
 -- ============================================================================
 -- VERIFICATION QUERIES
@@ -81,4 +83,4 @@ CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION ALLOW_ALL_ACCESS_INTEGRATION
 SELECT 'Infrastructure setup complete!' AS STATUS;
 
 SHOW COMPUTE POOLS LIKE $compute_pool_name;
-SHOW EXTERNAL ACCESS INTEGRATIONS;
+SHOW EXTERNAL ACCESS INTEGRATIONS LIKE 'DRI%';

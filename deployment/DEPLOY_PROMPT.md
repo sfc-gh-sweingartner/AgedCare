@@ -58,7 +58,7 @@ Database: AGEDCARE_TEST
 Schema: DRI
 Warehouse: COMPUTE_WH
 Compute Pool: DRI_COMPUTE_POOL
-External Access Integration: ALLOW_ALL_ACCESS_INTEGRATION
+External Access Integration: DRI_PYPI_ACCESS_INTEGRATION
 
 Please execute all deployment steps including patient data loading and verify the app is working.
 ```
@@ -73,7 +73,7 @@ Database: AGEDCARE_TEST
 Schema: DRI
 Warehouse: COMPUTE_WH
 Compute Pool: DRI_COMPUTE_POOL
-External Access Integration: ALLOW_ALL_ACCESS_INTEGRATION
+External Access Integration: DRI_PYPI_ACCESS_INTEGRATION
 
 Please execute all deployment steps (skip patient data) and verify the app is working.
 ```

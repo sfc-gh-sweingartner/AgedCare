@@ -39,7 +39,7 @@
 --     compute_pool: <YOUR_COMPUTE_POOL>  # e.g., DRI_COMPUTE_POOL
 --     runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
 --     external_access_integrations:
---       - <YOUR_INTEGRATION>           # e.g., ALLOW_ALL_ACCESS_INTEGRATION
+--       - <YOUR_INTEGRATION>           # e.g., DRI_PYPI_ACCESS_INTEGRATION
 --     main_file: streamlit_app.py
 --     artifacts:
 --       - streamlit_app.py
