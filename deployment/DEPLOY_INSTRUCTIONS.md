@@ -77,6 +77,24 @@ Run `load_config_data.sql` to load configuration:
 snow sql -f deployment/load_config_data.sql -c <CONNECTION_NAME>
 ```
 
+### Step 6.5: Create Stored Procedures
+Run `setup_procedures.sql` to create the DRI processor procedures:
+
+```bash
+# First set the database context, then create procedures
+snow sql -c <CONNECTION_NAME> -q "USE DATABASE <DATABASE>; USE SCHEMA <SCHEMA>;"
+
+# Create the procedures (run each separately to avoid session issues)
+snow sql -f deployment/setup_procedures.sql -c <CONNECTION_NAME>
+```
+
+This creates:
+- `CALCULATE_DRI_SCORES()` - Recalculates DRI scores for all residents
+- `DRI_TIME_PROCESSOR(VARCHAR, VARCHAR)` - Daily expiry and threshold processor
+- `DRI_EVENT_PROCESSOR(...)` - Processes indicator confirmations/rejections
+
+**Note:** If you encounter "Cannot perform CREATE PROCEDURE. This session does not have a current database" errors, you may need to use fully-qualified procedure names or run the USE DATABASE/SCHEMA commands immediately before each CREATE PROCEDURE in a single query.
+
 ### Step 7: Configure snowflake.yml
 Update `dri-intelligence/snowflake.yml` with your environment settings:
 
@@ -196,6 +214,13 @@ UNION ALL SELECT 'DRI_RULES', COUNT(*) FROM DRI_RULES
 UNION ALL SELECT 'DRI_CLIENT_RULE_ASSIGNMENTS', COUNT(*) FROM DRI_CLIENT_RULE_ASSIGNMENTS;
 ```
 
+### Check Stored Procedures
+```sql
+SELECT PROCEDURE_NAME FROM INFORMATION_SCHEMA.PROCEDURES 
+WHERE PROCEDURE_SCHEMA = 'DRI';
+-- Should return: CALCULATE_DRI_SCORES, DRI_EVENT_PROCESSOR, DRI_TIME_PROCESSOR
+```
+
 ### Check Streamlit App
 ```sql
 SHOW STREAMLITS IN SCHEMA <DATABASE>.<SCHEMA>;
@@ -233,6 +258,7 @@ SELECT SYSTEM$GET_STREAMLIT_URL('<DATABASE>.<SCHEMA>.DRI_INTELLIGENCE');
 |------|---------|
 | `setup_infrastructure.sql` | Create compute pool and external access |
 | `setup_database.sql` | Create all database objects |
+| `setup_procedures.sql` | Create DRI processor stored procedures |
 | `load_config_data.sql` | Load config CSVs into tables |
 | `load_patients.sql` | Load patient data CSVs (optional) |
 | `deploy_streamlit.sql` | Documentation for Streamlit deployment |

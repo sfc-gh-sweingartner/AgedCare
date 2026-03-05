@@ -2,6 +2,9 @@
 
 Use this prompt to instruct Cortex Code (CoCo) to deploy DRI Intelligence to a new environment.
 
+**Git Repository:** https://github.com/sfc-gh-sweingartner/AgedCare  
+**Detailed Instructions:** See `deployment/DEPLOY_INSTRUCTIONS.md` for comprehensive step-by-step guide
+
 ## Prompt
 
 ```
@@ -19,9 +22,10 @@ Please:
 2. Run deployment/setup_database.sql to create all tables and views
 3. Upload config CSVs from Confidential/deployment/config_data/ to stage
 4. Run deployment/load_config_data.sql to load config data
-5. Update dri-intelligence/snowflake.yml with the environment settings
-6. Deploy the Streamlit app using: snow streamlit deploy -c <CONNECTION_NAME>
-7. Verify the deployment by checking table counts and app status
+5. Run deployment/setup_procedures.sql to create stored procedures
+6. Update dri-intelligence/snowflake.yml with the environment settings
+7. Deploy the Streamlit app using: snow streamlit deploy -c <CONNECTION_NAME>
+8. Verify the deployment by checking table counts, procedures, and app status
 ```
 
 ## Prompt with Patient Data (Optional)
@@ -41,11 +45,12 @@ Please:
 2. Run deployment/setup_database.sql to create all tables and views
 3. Upload config CSVs from Confidential/deployment/config_data/ to stage
 4. Run deployment/load_config_data.sql to load config data
-5. Upload patient CSVs from Confidential/deployment/patient_data/ to stage (patients folder)
-6. Run deployment/load_patients.sql to load patient demo data
-7. Update dri-intelligence/snowflake.yml with the environment settings
-8. Deploy the Streamlit app using: snow streamlit deploy -c <CONNECTION_NAME>
-9. Verify the deployment by checking table counts and app status
+5. Run deployment/setup_procedures.sql to create stored procedures
+6. Upload patient CSVs from Confidential/deployment/patient_data/ to stage (patients folder)
+7. Run deployment/load_patients.sql to load patient demo data
+8. Update dri-intelligence/snowflake.yml with the environment settings
+9. Deploy the Streamlit app using: snow streamlit deploy -c <CONNECTION_NAME>
+10. Verify the deployment by checking table counts, procedures, and app status
 ```
 
 ## Example for AU_DEMO29 (with Patient Data)
@@ -94,9 +99,12 @@ Please:
 
 ## Notes
 
+- **Git Repository:** https://github.com/sfc-gh-sweingartner/AgedCare
+- **Detailed Instructions:** `deployment/DEPLOY_INSTRUCTIONS.md`
 - The deployment uses SPCS container runtime (SYSTEM$ST_CONTAINER_RUNTIME_PY3_11)
 - Streamlit apps with container runtime MUST use `snow streamlit deploy`, not SQL CREATE STREAMLIT
 - Config data CSVs are in Confidential/deployment/config_data/ (not committed to public repo)
 - Patient data CSVs are in Confidential/deployment/patient_data/ (optional, for demo/testing)
 - The app uses get_active_session() which automatically inherits database/schema context
 - Patient data has been pre-cleansed to handle invalid timestamps in source data
+- **Stored procedures** (setup_procedures.sql) are required for indicator processing
